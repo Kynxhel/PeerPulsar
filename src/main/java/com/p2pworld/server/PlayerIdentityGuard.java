@@ -42,6 +42,11 @@ public final class PlayerIdentityGuard {
 
     private PlayerIdentityGuard() {}
 
+    private static boolean isLocalHostPlayer(ServerPlayer player, MinecraftServer server) {
+        return server.isSingleplayerOwner(player.nameAndId())
+                && "local".equalsIgnoreCase(player.getIpAddress());
+    }
+
     /**
      * Called when a player joins the server. If their username is already bound to a Google account,
      * they must present a valid Google-signed id_token matching that account within 8 seconds or be disconnected.
@@ -52,6 +57,12 @@ public final class PlayerIdentityGuard {
         verifiedThisSession.remove(uuid);
         long joinToken = JOIN_SEQ.incrementAndGet();
         activeJoinToken.put(uuid, joinToken);
+
+        // Never lock the local in-memory singleplayer host out of their own world (e.g. when playing offline)
+        if (isLocalHostPlayer(player, server)) {
+            verifiedThisSession.add(uuid);
+            return;
+        }
 
         String usernameKey = player.getName().getString().toLowerCase(Locale.ROOT);
         Map<String, String> bindings = loadBindings(server);
@@ -114,6 +125,10 @@ public final class PlayerIdentityGuard {
             }
 
             if (!matches) {
+                if (isLocalHostPlayer(player, server)) {
+                    verifiedThisSession.add(player.getUUID());
+                    return true;
+                }
                 FabricP2PMod.LOGGER.warn("[IdentityGuard] Blocked nickname spoof for '{}'!", username);
                 player.connection.disconnect(Component.literal(
                         "§c[FabricP2P] Access Denied!\n§7Username '" + username

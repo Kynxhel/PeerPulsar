@@ -276,14 +276,26 @@ public class SharedWorldManager {
             return CompletableFuture.completedFuture(new SyncOpResult(false, "Invalid world name."));
         }
 
+        Path savesRoot = mc.gameDirectory.toPath().resolve("saves").toAbsolutePath().normalize();
+        Path targetWorldDir = savesRoot.resolve(safeName).normalize();
+        if (!targetWorldDir.startsWith(savesRoot) || targetWorldDir.equals(savesRoot)) {
+            return CompletableFuture.completedFuture(new SyncOpResult(false, "Unsafe target world path rejected."));
+        }
+
+        // Prevent overwriting an actively loaded singleplayer world on disk
+        IntegratedServer openServer = mc.getSingleplayerServer();
+        if (openServer != null) {
+            Path openWorldDir = openServer.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
+            if (openWorldDir.equals(targetWorldDir)) {
+                return CompletableFuture.completedFuture(new SyncOpResult(
+                        false, "Save & Quit to Title Screen before pulling updates into this open world."
+                ));
+            }
+        }
+
         return CompletableFuture.supplyAsync(() -> {
             this.syncing = true;
             try {
-                Path savesRoot = mc.gameDirectory.toPath().resolve("saves").toAbsolutePath().normalize();
-                Path targetWorldDir = savesRoot.resolve(safeName).normalize();
-                if (!targetWorldDir.startsWith(savesRoot) || targetWorldDir.equals(savesRoot)) {
-                    return new SyncOpResult(false, "Unsafe target world path rejected.");
-                }
                 Files.createDirectories(targetWorldDir);
 
                 if (cfg.isGoogleSignedIn() && !cfg.hasValidSyncFolder()) {
@@ -346,7 +358,7 @@ public class SharedWorldManager {
 
             // Delete files removed on host
             for (Map.Entry<String, ManifestFile> oldEntry : oldManifest.files.entrySet()) {
-                if (!newManifest.files.containsKey(oldEntry.getKey())) {
+                if (!newManifest.files.containsKey(oldEntry.getKey()) && oldEntry.getValue() != null) {
                     drive.deleteFileById(oldEntry.getValue().driveFileId);
                 }
             }
