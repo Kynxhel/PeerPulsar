@@ -96,7 +96,7 @@ public class P2PNetworkManager {
                 stopP2PHost(client);
                 if (client.player != null) {
                     client.player.sendSystemMessage(Component.literal(
-                            "§c⚠ [Atarca] §fTunnel Relay connection dropped (" + reason + "). Start P2P again to reconnect."
+                            "§c⚠ [PeerPulsar] §fTunnel Relay connection dropped (" + reason + "). Start P2P again to reconnect."
                     ));
                 }
             });
@@ -395,7 +395,7 @@ public class P2PNetworkManager {
                     if (!useTunnel) {
                         FabricP2PMod.LOGGER.info("[P2P-26.3] Attempting Direct P2P via UPnP IGD...");
                         didUpnp = true;
-                        boolean upnpOk = UPnPService.getInstance().openPort(port, "Atarca P2P World (26.3)");
+                        boolean upnpOk = UPnPService.getInstance().openPort(port, "PeerPulsar P2P World (26.3)");
                         if (isHostAttemptCancelled(gen, server)) {
                             rollbackHostAttempt(client, server, gen, didPublish, didUpnp, false, false, callback);
                             return;
@@ -481,7 +481,7 @@ public class P2PNetworkManager {
                     }
                     if (client.player != null) {
                         client.player.sendSystemMessage(Component.literal(
-                                "§b✦ [Atarca] " + modeTag + " §fWorld is live! Room Code: §b§l" + finalRoomCode));
+                                "§b✦ [PeerPulsar] " + modeTag + " §fWorld is live! Room Code: §b§l" + finalRoomCode));
                     }
                     callback.accept(true);
                 });
@@ -602,7 +602,7 @@ public class P2PNetworkManager {
                 }
             }
             if (client.player != null) {
-                client.player.sendSystemMessage(Component.literal("§c■ [Atarca] §fP2P hosting stopped and network resources cleared."));
+                client.player.sendSystemMessage(Component.literal("§c■ [PeerPulsar] §fP2P hosting stopped and network resources cleared."));
             }
         }
     }

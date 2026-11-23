@@ -1,5 +1,8 @@
 # Changelog
 
+## v3.1.0+26.3
+- **Rebranded to PeerPulsar:** Renamed the mod, ID (`peerpulsar`), assets, UI titles, chat notifications, and release artifacts (`peerpulsar-26.3-*.jar`) to **PeerPulsar**, and updated the mod icon with the new binary-pulsar logo.
+
 ## v3.0.0+26.3
 - **Rebranded to Atarca:** Renamed the mod, ID (`atarca`), assets, UI titles, chat notifications, and release artifacts (`atarca-26.3-*.jar`) to **Atarca**.
 - **Removed Cloud World Sync & Google OAuth:** Completely removed Shared Cloud Worlds, Google Sign-In, Google Drive sync, and OIDC identity locking. Google Drive's `drive.file` scope does not permit invited players to read files created by another user inside shared folders, while the full `drive` scope enforces a 100-user cap on unverified apps and requires a paid annual CASA audit. Atarca now focuses 100% on fast, unlimited, zero-account P2P world hosting (Direct UPnP, UDP Hole Punching, Tunnel Relay, and Local LAN).

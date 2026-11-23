@@ -1,4 +1,4 @@
-name: Build Atarca
+name: Build PeerPulsar
 
 on:
   push:
@@ -29,5 +29,5 @@ jobs:
       - name: Upload Built JAR Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: atarca-26.3
+          name: peerpulsar-26.3
           path: build/libs/*.jar

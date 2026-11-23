@@ -8,7 +8,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 public class FabricP2PClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
-        FabricP2PMod.LOGGER.info("[Atarca-Client] Neon P2P Engine initialized (MC 26.3).");
+        FabricP2PMod.LOGGER.info("[PeerPulsar-Client] Neon P2P Engine initialized (MC 26.3).");
         P2PNetworkManager.getInstance();
 
         // Automatically clean up UPnP/UDP/Tunnel when leaving a world

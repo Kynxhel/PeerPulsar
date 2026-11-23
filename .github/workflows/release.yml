@@ -31,7 +31,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          MOD_JAR=$(find build/libs -maxdepth 1 -name 'atarca-*.jar' ! -name '*-sources.jar' | head -n 1)
+          MOD_JAR=$(find build/libs -maxdepth 1 -name 'peerpulsar-*.jar' ! -name '*-sources.jar' | head -n 1)
           if [ -z "$MOD_JAR" ]; then
             echo "Built mod JAR not found!" >&2
             exit 1
@@ -47,12 +47,12 @@ jobs:
           fi
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release edit "${GITHUB_REF_NAME}" \
-              --title "Atarca ${GITHUB_REF_NAME}" \
+              --title "PeerPulsar ${GITHUB_REF_NAME}" \
               --notes-file release_notes.md
             gh release upload "${GITHUB_REF_NAME}" "$MOD_JAR" --clobber
           else
             gh release create "${GITHUB_REF_NAME}" \
               "$MOD_JAR" \
-              --title "Atarca ${GITHUB_REF_NAME}" \
+              --title "PeerPulsar ${GITHUB_REF_NAME}" \
               --notes-file release_notes.md
           fi

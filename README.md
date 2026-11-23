@@ -1,4 +1,4 @@
-# 🌐 Atarca
+# 🌐 PeerPulsar
 
 [![Minecraft 26.3](https://img.shields.io/badge/Minecraft-26.3-10B981?style=for-the-badge)](https://www.minecraft.net/)
 [![Fabric Loader](https://img.shields.io/badge/Fabric-0.19.5+-00F0FF?style=for-the-badge)](https://fabricmc.net/)
@@ -6,14 +6,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/Sponsor-Kynxhel-EA4AAA?style=for-the-badge&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/Kynxhel)
 
-**Atarca** *(formerly Fabric P2P World)* is a lightweight, open-source **Peer-to-Peer World Hosting** mod for **Minecraft 26.3 (Fabric)**. Host your singleplayer worlds directly from the Pause Menu with zero paid servers, zero account sign-ins, automatic NAT/CGNAT detection, **UDP Hole Punching**, automatic **TCP Tunnel Relay**, and smart room codes.
+**PeerPulsar** *(formerly Atarca / Fabric P2P World)* is a lightweight, open-source **Peer-to-Peer World Hosting** mod for **Minecraft 26.3 (Fabric)**. Host your singleplayer worlds directly from the Pause Menu with zero paid servers, zero account sign-ins, automatic NAT/CGNAT detection, **UDP Hole Punching**, automatic **TCP Tunnel Relay**, and smart room codes.
 
 ---
 
 ## ✨ Features
 
 ### 🚀 4 Smart Connection Modes (Auto-Tested & Ranked)
-When you open the **Start P2P** screen, Atarca automatically tests your network (Public IP, UPnP port mapping, CGNAT, Cone vs. Symmetric NAT via Dual-STUN, and Relay latency) and shows a live right-side selector with **green/red status dots** and a **`(Recommended)`** tag on the fastest supported option:
+When you open the **Start P2P** screen, PeerPulsar automatically tests your network (Public IP, UPnP port mapping, CGNAT, Cone vs. Symmetric NAT via Dual-STUN, and Relay latency) and shows a live right-side selector with **green/red status dots** and a **`(Recommended)`** tag on the fastest supported option:
 
 | Mode | Best For | Overhead | Works Behind CGNAT? |
 | :--- | :--- | :---: | :---: |
@@ -38,7 +38,7 @@ In `v3.0.0`, the experimental **Shared Cloud Worlds (Google Drive Sync)** featur
 - Google Drive API's restricted `drive` scope caps unverified apps at **100 total users**, shows a frightening unverified-app full-Drive warning screen, and requires an expensive annual CASA security audit to lift for public open-source mods.
 - Google's non-restricted `drive.file` scope isolates files strictly per-user, meaning invited friends **cannot** read shared world files (`manifest.json`, `session.lock.json`, region files) created by another player via the API.
 
-Rather than shipping a capped or intrusive cloud integration, **Atarca** focuses 100% on fast, unlimited, zero-account peer-to-peer hosting.
+Rather than shipping a capped or intrusive cloud integration, **PeerPulsar** focuses 100% on fast, unlimited, zero-account peer-to-peer hosting.
 
 ---
 
@@ -46,7 +46,7 @@ Rather than shipping a capped or intrusive cloud integration, **Atarca** focuses
 
 1. Install **Minecraft 26.3** with **Fabric Loader `>= 0.19.5`**.
 2. Download and install **Fabric API** for Minecraft `26.3`.
-3. Drop `atarca-26.3-3.0.0+26.3.jar` into your `.minecraft/mods/` folder.
+3. Drop `peerpulsar-26.3-3.1.0+26.3.jar` into your `.minecraft/mods/` folder.
 4. Launch the game — open any world, press `Esc`, and click **`Start P2P`**!
 
 ---

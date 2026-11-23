@@ -556,7 +556,7 @@ public class P2PHostScreen extends Screen {
         int logoSize = compact ? 24 : 28;
         NeonRenderUtils.drawModLogo(graphics, panelLeft + 2, headerY, logoSize, primaryAccent, timeSec);
 
-        graphics.text(this.font, Component.literal("ATARCA").withStyle(ChatFormatting.BOLD),
+        graphics.text(this.font, Component.literal("PEERPULSAR").withStyle(ChatFormatting.BOLD),
                 panelLeft + logoSize + 10, headerY + 2, NeonTheme.TEXT_PRIMARY, true);
         if (!compact) {
             graphics.text(this.font, tr("screen.fabricp2p.host.subtitle"),

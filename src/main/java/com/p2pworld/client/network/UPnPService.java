@@ -128,7 +128,7 @@ public class UPnPService {
             boolean canMapPort = false;
             if (testPortMapping && this.localIp != null && !this.localIp.startsWith("127.")) {
                 int probePort = 54321 + (int) (System.currentTimeMillis() % 4000);
-                if (addPortMapping(probePort, this.localIp, "TCP", "Atarca Diagnostic Probe") >= 0) {
+                if (addPortMapping(probePort, this.localIp, "TCP", "PeerPulsar Diagnostic Probe") >= 0) {
                     canMapPort = true;
                     deletePortMapping(probePort, "TCP");
                 }
@@ -179,7 +179,7 @@ public class UPnPService {
     }
 
     public CompletableFuture<Boolean> openPortAsync(int port) {
-        return openPortAsync(port, "Atarca P2P World (26.3)");
+        return openPortAsync(port, "PeerPulsar P2P World (26.3)");
     }
 
     /**
