@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.1.0+26.3
+- **Google Account Anti-Spoof Nickname Protection:** Binds each player's username to their Google account (`fabricp2p_identities.json`) so nobody can impersonate another player's nickname in Offline LAN worlds.
+- **Automatic Google Drive Auto-Sharing on Join:** When a friend signed into Google joins your Shared Cloud World, they are automatically granted Editor access to the world's Drive folder and auto-linked in their `Shared Worlds` menu — zero manual sharing required!
+- **SHA-256 Incremental (Delta) Cloud Sync:** Uploads and downloads only new or modified world files (`manifest.json`), skipping unchanged region files for near-instant sync.
+
 ## v2.0.0+26.3
 - **Minecraft 26.3 Native Support:** Built natively for Minecraft 26.3 (unobfuscated) with Fabric Loader `>=0.19.5` and Fabric API `0.165.2+26.3`.
 - **Neon Control Center UI:** Custom glassmorphism host, join, and shared worlds screens with animated particle background, live signal bars, and toast notifications.

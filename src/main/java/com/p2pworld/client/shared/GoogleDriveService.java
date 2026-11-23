@@ -176,6 +176,45 @@ public class GoogleDriveService {
         } catch (Exception ignored) {}
     }
 
+    /**
+     * Automatically grants Editor (writer) permission on a shared Google Drive folder
+     * to a joining friend's Google email address (zero manual sharing needed!).
+     */
+    public boolean shareFolderWithEmail(String folderId, String email) {
+        if (folderId == null || folderId.isBlank() || email == null || email.isBlank() || !email.contains("@")) {
+            return false;
+        }
+        try {
+            String token = GoogleAuthService.getInstance().getValidAccessToken();
+            JsonObject perm = new JsonObject();
+            perm.addProperty("role", "writer");
+            perm.addProperty("type", "user");
+            perm.addProperty("emailAddress", email.trim());
+
+            String url = DRIVE_API + "/" + folderId + "/permissions?sendNotificationEmail=false";
+            HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(8000);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(perm.toString().getBytes(StandardCharsets.UTF_8));
+            }
+            int code = conn.getResponseCode();
+            if (code >= 200 && code < 300) {
+                FabricP2PMod.LOGGER.info("[GoogleDrive] Auto-shared folder {} with {} (Editor).", folderId, email);
+                return true;
+            }
+            FabricP2PMod.LOGGER.warn("[GoogleDrive] Share permission response {}: {}", code, email);
+            return false;
+        } catch (Exception e) {
+            FabricP2PMod.LOGGER.warn("[GoogleDrive] Failed to share folder with {}: {}", email, e.getMessage());
+            return false;
+        }
+    }
+
     public boolean downloadFile(String parentFolderId, String fileName, Path destFile) throws IOException {
         String token = GoogleAuthService.getInstance().getValidAccessToken();
         String fileId = findFileId(token, fileName, parentFolderId);
