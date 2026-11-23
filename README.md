@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/Sponsor-Kynxhel-EA4AAA?style=for-the-badge&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/Kynxhel)
 
-**PeerPulsar** *(formerly Atarca / Fabric P2P World)* is a lightweight, open-source **Peer-to-Peer World Hosting** mod for **Minecraft 26.3 (Fabric)**. Host your singleplayer worlds directly from the Pause Menu with zero paid servers, zero account sign-ins, automatic NAT/CGNAT detection, **UDP Hole Punching**, automatic **TCP Tunnel Relay**, and smart room codes.
+**PeerPulsar** *(Fabric P2P World)* is a lightweight, open-source **Peer-to-Peer World Hosting** mod for **Minecraft 26.3 (Fabric)**. Host your singleplayer worlds directly from the Pause Menu with zero paid servers, zero account sign-ins, automatic NAT/CGNAT detection, **UDP Hole Punching**, automatic **TCP Tunnel Relay**, and smart room codes.
 
 ---
 
