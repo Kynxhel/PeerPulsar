@@ -7,11 +7,19 @@ import com.p2pworld.client.shared.SharedWorldManager;
 import com.p2pworld.network.P2PIdentityPayloads;
 import com.p2pworld.server.PlayerIdentityGuard;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
+import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.fabricmc.fabric.api.event.player.UseEntityCallback;
+import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,11 +55,54 @@ public class FabricP2PMod implements ModInitializer {
             PlayerIdentityGuard.onPlayerDisconnect(handler.player.getUUID());
         });
 
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+            PlayerIdentityGuard.onServerStopped();
+        });
+
+        // Restrict world interactions and movement while a bound player is pending OIDC verification
+        AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
+            if (!world.isClientSide() && PlayerIdentityGuard.isPendingVerification(player.getUUID())) {
+                return InteractionResult.FAIL;
+            }
+            return InteractionResult.PASS;
+        });
+
+        UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+            if (!world.isClientSide() && PlayerIdentityGuard.isPendingVerification(player.getUUID())) {
+                return InteractionResult.FAIL;
+            }
+            return InteractionResult.PASS;
+        });
+
+        AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+            if (!world.isClientSide() && PlayerIdentityGuard.isPendingVerification(player.getUUID())) {
+                return InteractionResult.FAIL;
+            }
+            return InteractionResult.PASS;
+        });
+
+        UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+            if (!world.isClientSide() && PlayerIdentityGuard.isPendingVerification(player.getUUID())) {
+                return InteractionResult.FAIL;
+            }
+            return InteractionResult.PASS;
+        });
+
+        UseItemCallback.EVENT.register((player, world, hand) -> {
+            if (!world.isClientSide() && PlayerIdentityGuard.isPendingVerification(player.getUUID())) {
+                return InteractionResult.FAIL;
+            }
+            return InteractionResult.PASS;
+        });
+
+        ServerTickEvents.END_SERVER_TICK.register(PlayerIdentityGuard::enforcePendingAnchors);
+
         // Handle incoming Google OIDC ID Token handshake from joining players
         ServerPlayNetworking.registerGlobalReceiver(
                 P2PIdentityPayloads.GoogleIdentityC2SPayload.TYPE,
                 (payload, context) -> {
-                    UUID playerUuid = context.player().getUUID();
+                    ServerPlayer joiningPlayer = context.player();
+                    UUID playerUuid = joiningPlayer.getUUID();
                     MinecraftServer server = context.server();
                     String idToken = payload.idToken();
 
@@ -59,7 +110,7 @@ public class FabricP2PMod implements ModInitializer {
                     CompletableFuture.supplyAsync(() -> GoogleAuthService.verifyIdTokenWithGoogle(idToken))
                             .thenAccept(verified -> server.execute(() -> {
                                 ServerPlayer player = server.getPlayerList().getPlayer(playerUuid);
-                                if (player == null) return;
+                                if (player == null || player != joiningPlayer) return;
 
                                 boolean allowed = PlayerIdentityGuard.verifyAndBind(player, verified, server);
                                 if (!allowed || verified == null) {

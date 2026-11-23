@@ -18,9 +18,11 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 
 /**
@@ -40,6 +42,10 @@ public class GoogleDriveService {
 
     private static GoogleDriveService instance;
 
+    private final Object rootFolderLock = new Object();
+    private volatile boolean rootFolderVerifiedThisSession = false;
+    private volatile String verifiedRootFolderId = null;
+
     private GoogleDriveService() {}
 
     public static synchronized GoogleDriveService getInstance() {
@@ -51,27 +57,75 @@ public class GoogleDriveService {
 
     /**
      * Ensures the root "FabricP2P_SharedWorlds" folder exists in Google Drive and returns its ID.
+     * Verifies any cached folder ID once per session and recreates it if deleted or trashed.
      */
     public String getOrCreateRootFolderId() throws IOException {
-        SharedWorldConfig cfg = SharedWorldConfig.getInstance();
-        String cachedId = cfg.getGoogleDriveFolderId();
-        if (!cachedId.isBlank()) {
-            return cachedId;
+        synchronized (rootFolderLock) {
+            SharedWorldConfig cfg = SharedWorldConfig.getInstance();
+            String cachedId = cfg.getGoogleDriveFolderId();
+            if (!cachedId.isBlank()) {
+                if (rootFolderVerifiedThisSession && cachedId.equals(verifiedRootFolderId)) {
+                    return cachedId;
+                }
+                rootFolderVerifiedThisSession = false;
+                verifiedRootFolderId = null;
+
+                String token = GoogleAuthService.getInstance().getValidAccessToken();
+                HttpRequest verifyReq = HttpRequest.newBuilder()
+                        .uri(URI.create(DRIVE_API + "/" + encPathSegment(cachedId) + "?fields=id,trashed"))
+                        .timeout(Duration.ofSeconds(10))
+                        .header("Authorization", "Bearer " + token)
+                        .GET()
+                        .build();
+                HttpResponse<String> verifyResp = sendString(verifyReq);
+                int status = verifyResp.statusCode();
+                if (status == 200) {
+                    JsonObject obj = JsonParser.parseString(verifyResp.body()).getAsJsonObject();
+                    boolean trashed = obj.has("trashed") && !obj.get("trashed").isJsonNull()
+                            && obj.get("trashed").getAsBoolean();
+                    if (!trashed) {
+                        verifiedRootFolderId = cachedId;
+                        rootFolderVerifiedThisSession = true;
+                        return cachedId;
+                    }
+                    FabricP2PMod.LOGGER.warn("[GoogleDrive] Cached root folder {} is trashed; finding or recreating.", cachedId);
+                    cfg.setGoogleDriveFolderId("");
+                } else if (status == 404) {
+                    FabricP2PMod.LOGGER.warn("[GoogleDrive] Cached root folder {} not found (404); finding or recreating.", cachedId);
+                    cfg.setGoogleDriveFolderId("");
+                } else {
+                    throw new IOException("Drive root folder verification failed (" + status + "): " + truncate(verifyResp.body()));
+                }
+            } else {
+                rootFolderVerifiedThisSession = false;
+                verifiedRootFolderId = null;
+            }
+
+            String token = GoogleAuthService.getInstance().getValidAccessToken();
+            String existing = findFolderId(token, ROOT_FOLDER_NAME, null);
+            if (existing != null) {
+                cfg.setGoogleDriveFolderId(existing);
+                verifiedRootFolderId = existing;
+                rootFolderVerifiedThisSession = true;
+                return existing;
+            }
+            String created = createFolder(token, ROOT_FOLDER_NAME, null);
+            cfg.setGoogleDriveFolderId(created);
+            verifiedRootFolderId = created;
+            rootFolderVerifiedThisSession = true;
+            return created;
         }
-        String token = GoogleAuthService.getInstance().getValidAccessToken();
-        String existing = findFolderId(token, ROOT_FOLDER_NAME, null);
-        if (existing != null) {
-            cfg.setGoogleDriveFolderId(existing);
-            return existing;
-        }
-        String created = createFolder(token, ROOT_FOLDER_NAME, null);
-        cfg.setGoogleDriveFolderId(created);
-        return created;
     }
 
     public List<DriveItem> listSubfolders(String parentFolderId) throws IOException {
         String token = GoogleAuthService.getInstance().getValidAccessToken();
         String q = "'" + escapeQuery(parentFolderId) + "' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+        return queryFiles(token, q);
+    }
+
+    public List<DriveItem> listFilesInFolder(String parentFolderId) throws IOException {
+        String token = GoogleAuthService.getInstance().getValidAccessToken();
+        String q = "'" + escapeQuery(parentFolderId) + "' in parents and trashed = false";
         return queryFiles(token, q);
     }
 
@@ -147,6 +201,41 @@ public class GoogleDriveService {
         return createMultipartFile(token, parentFolderId, fileName, mimeType, data);
     }
 
+    /**
+     * Uploads or updates an in-memory byte snapshot and returns its Google Drive file ID.
+     */
+    public String uploadOrUpdateBytesById(String parentFolderId, String existingFileId, String fileName, String mimeType, byte[] data) throws IOException {
+        if (data.length > RESUMABLE_THRESHOLD_BYTES) {
+            Path tmp = Files.createTempFile("fp2p-drive-upload-", ".tmp");
+            try {
+                Files.write(tmp, data);
+                return uploadOrUpdateFileById(parentFolderId, existingFileId, fileName, mimeType, tmp);
+            } finally {
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+            }
+        }
+
+        String token = GoogleAuthService.getInstance().getValidAccessToken();
+        if (existingFileId != null && !existingFileId.isBlank()) {
+            HttpRequest patchReq = HttpRequest.newBuilder()
+                    .uri(URI.create(DRIVE_UPLOAD_API + "/" + encPathSegment(existingFileId) + "?uploadType=media"))
+                    .timeout(Duration.ofSeconds(60))
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", mimeType)
+                    .method("PATCH", HttpRequest.BodyPublishers.ofByteArray(data))
+                    .build();
+            HttpResponse<String> patchResp = sendString(patchReq);
+            if (patchResp.statusCode() >= 200 && patchResp.statusCode() < 300) {
+                return existingFileId;
+            }
+            if (patchResp.statusCode() != 404) {
+                throw new IOException("Drive PATCH failed (" + patchResp.statusCode() + "): " + truncate(patchResp.body()));
+            }
+        }
+
+        return createMultipartFile(token, parentFolderId, fileName, mimeType, data);
+    }
+
     private String uploadResumable(String token, String parentFolderId, String existingFileId,
                                    String fileName, String mimeType, Path localFile) throws IOException {
         HttpRequest initReq;
@@ -215,21 +304,46 @@ public class GoogleDriveService {
                 .header("Authorization", "Bearer " + token)
                 .GET()
                 .build();
+        Path parent = destFile.getParent();
+        Path tmpFile = destFile.resolveSibling(destFile.getFileName().toString() + ".p2p.tmp");
+        boolean moved = false;
         try {
             HttpResponse<InputStream> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofInputStream());
             try (InputStream in = resp.body()) {
                 if (resp.statusCode() != 200) {
                     return false;
                 }
-                Files.createDirectories(destFile.getParent());
-                try (OutputStream out = Files.newOutputStream(destFile)) {
-                    in.transferTo(out);
+                if (parent != null) {
+                    Files.createDirectories(parent);
+                }
+                long copied;
+                try (OutputStream out = Files.newOutputStream(tmpFile)) {
+                    copied = in.transferTo(out);
+                }
+                if (resp.headers().firstValue("Content-Encoding").isEmpty()) {
+                    OptionalLong expectedLen = resp.headers().firstValueAsLong("Content-Length");
+                    if (expectedLen.isPresent() && expectedLen.getAsLong() >= 0 && copied != expectedLen.getAsLong()) {
+                        throw new IOException("Incomplete Drive download: expected "
+                                + expectedLen.getAsLong() + " bytes, got " + copied);
+                    }
                 }
             }
+            try {
+                Files.move(tmpFile, destFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException atomicFallback) {
+                Files.move(tmpFile, destFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+            moved = true;
             return true;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("Drive download interrupted", e);
+        } finally {
+            if (!moved) {
+                try {
+                    Files.deleteIfExists(tmpFile);
+                } catch (IOException ignored) {}
+            }
         }
     }
 
@@ -304,10 +418,12 @@ public class GoogleDriveService {
                     .method("PATCH", HttpRequest.BodyPublishers.ofByteArray(data))
                     .build();
             HttpResponse<String> resp = sendString(patchReq);
-            if (resp.statusCode() >= 400) {
+            if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
+                return;
+            }
+            if (resp.statusCode() != 404) {
                 throw new IOException("Drive update failed (" + resp.statusCode() + "): " + truncate(resp.body()));
             }
-            return;
         }
 
         createMultipartFile(token, parentFolderId, fileName, mimeType, data);
@@ -377,6 +493,10 @@ public class GoogleDriveService {
                 .build();
         HttpResponse<String> resp = sendString(req);
         if (resp.statusCode() >= 400) {
+            if (resp.statusCode() == 404 && parentId != null && parentId.equals(verifiedRootFolderId)) {
+                rootFolderVerifiedThisSession = false;
+                verifiedRootFolderId = null;
+            }
             throw new IOException("Drive createFolder failed (" + resp.statusCode() + "): " + truncate(resp.body()));
         }
         return JsonParser.parseString(resp.body()).getAsJsonObject().get("id").getAsString();

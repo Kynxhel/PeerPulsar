@@ -22,13 +22,15 @@ public class RoomCodeHelper {
      * Example: 85.102.50.21:25565 -> P2P-XXXX-XXXX-XXXX
      */
     public static String encodeRoomCode(String ip, int port) {
+        if (ip == null || ip.isBlank()) {
+            return "";
+        }
         try {
             // Only pack into compact 6-byte XOR hex if input is already an IPv4 literal or resolves to IPv4
             InetAddress address = InetAddress.getByName(ip);
             byte[] ipBytes = address.getAddress();
             if (!(address instanceof Inet4Address) || ipBytes.length != 4) {
-                String hostPart = ip.contains(":") && !ip.startsWith("[") ? ("[" + ip + "]") : ip;
-                String combined = hostPart + ":" + port;
+                String combined = formatHostPort(ip, port);
                 return PREFIX + Base64.getUrlEncoder().withoutPadding()
                         .encodeToString(combined.getBytes(StandardCharsets.UTF_8));
             }
@@ -49,8 +51,17 @@ public class RoomCodeHelper {
             }
             return PREFIX + hex;
         } catch (Exception e) {
-            return ip + ":" + port;
+            return formatHostPort(ip, port);
         }
+    }
+
+    public static String formatHostPort(String host, int port) {
+        if (host == null) {
+            return ":" + port;
+        }
+        return (host.contains(":") && !host.startsWith("["))
+                ? ("[" + host + "]:" + port)
+                : (host + ":" + port);
     }
 
     /**
@@ -166,11 +177,12 @@ public class RoomCodeHelper {
     }
 
     public static String generateDiscordInvite(String roomCode, String hostIp, int port, boolean offlineMode, String gameMode) {
+        String safeMode = gameMode != null ? gameMode.toUpperCase() : "SURVIVAL";
         return "🎮 **Join my Minecraft 26.3 P2P World!**\n" +
                 "🔑 **Room Code:** `" + roomCode + "`\n" +
-                "🌐 **Direct Address:** `" + hostIp + ":" + port + "`\n" +
+                "🌐 **Direct Address:** `" + formatHostPort(hostIp, port) + "`\n" +
                 "⚡ **Offline LAN Mode:** " + (offlineMode ? "Enabled" : "Disabled (Online Auth)") + "\n" +
-                "⚔️ **Game Mode:** " + gameMode.toUpperCase() + "\n" +
+                "⚔️ **Game Mode:** " + safeMode + "\n" +
                 "👉 *Paste this invite into the 'Join P2P' screen in Fabric P2P World!*";
     }
 
@@ -199,7 +211,7 @@ public class RoomCodeHelper {
     public record ConnectionTarget(String host, int port, boolean isUdpHolePunch) {
         @Override
         public String toString() {
-            return isUdpHolePunch ? host : (host + ":" + port);
+            return isUdpHolePunch ? host : formatHostPort(host, port);
         }
     }
 }

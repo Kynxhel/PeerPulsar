@@ -12,13 +12,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(IntegratedServer.class)
 public abstract class IntegratedServerMixin {
     /**
-     * Intercepts publishServer on Minecraft 26.3 ONLY when Fabric P2P hosting is starting/active,
-     * applying both Offline LAN Auth and Mojang Online Auth transitions cleanly without affecting Vanilla LAN.
+     * Intercepts publishServer on Minecraft 26.3: applies Offline/Online LAN Auth when Fabric P2P
+     * hosting is starting/active, and explicitly restores Mojang Online Auth for Vanilla "Open to LAN"
+     * so stopping Offline P2P can never leave Vanilla LAN stuck in offline mode.
      */
     @Inject(method = "publishServer(Lnet/minecraft/server/MinecraftServer$MultiplayerScope;ZI)Z", at = @At("HEAD"))
     private void onPublishServerHead(MinecraftServer.MultiplayerScope scope, boolean cheatsAllowed, int port, CallbackInfoReturnable<Boolean> cir) {
         P2PNetworkManager manager = P2PNetworkManager.getInstance();
         if (!manager.isStarting() && !manager.isP2PActive()) {
+            ((MinecraftServer) (Object) this).setUsesAuthentication(true);
             return;
         }
         boolean useAuth = !manager.isOfflineModeEnabled();

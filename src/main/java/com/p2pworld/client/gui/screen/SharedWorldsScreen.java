@@ -5,6 +5,7 @@ import com.p2pworld.client.gui.fx.NeonTheme;
 import com.p2pworld.client.gui.fx.ParticleBackground;
 import com.p2pworld.client.gui.widget.NeonButton;
 import com.p2pworld.client.gui.widget.NeonToggleCard;
+import com.p2pworld.client.network.P2PNetworkManager;
 import com.p2pworld.client.network.RoomCodeHelper;
 import com.p2pworld.client.network.UdpHolePunchService;
 import com.p2pworld.client.shared.GoogleAuthService;
@@ -15,13 +16,17 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.network.chat.Component;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -156,16 +161,36 @@ public class SharedWorldsScreen extends Screen {
                 Component.translatable("screen.fabricp2p.shared.btn_save"),
                 NeonTheme.CYAN,
                 () -> {
-                    config.setSyncFolderPath(folderPathInput.getValue());
+                    String entered = folderPathInput.getValue() != null ? folderPathInput.getValue().trim() : "";
+                    if (entered.isBlank()) {
+                        config.setSyncFolderPath("");
+                        this.savedFolderInput = "";
+                        refreshWorldsListAsync(false);
+                        updateWidgetStates();
+                        if (config.isGoogleSignedIn()) {
+                            showToast(tr("screen.fabricp2p.shared.toast_using_drive"), NeonTheme.CYAN);
+                        } else {
+                            showToast(tr("screen.fabricp2p.shared.toast_folder_cleared"), NeonTheme.SLATE);
+                        }
+                        return;
+                    }
+
+                    boolean validDir = false;
+                    try {
+                        Path candidate = Path.of(entered);
+                        validDir = Files.exists(candidate) && Files.isDirectory(candidate);
+                    } catch (Exception ignored) {}
+
+                    if (!validDir) {
+                        showToast(tr("screen.fabricp2p.shared.toast_folder_invalid"), NeonTheme.CRIMSON);
+                        return;
+                    }
+
+                    config.setSyncFolderPath(entered);
+                    this.savedFolderInput = entered;
                     refreshWorldsListAsync(false);
                     updateWidgetStates();
-                    if (config.hasValidSyncFolder()) {
-                        showToast(tr("screen.fabricp2p.shared.toast_folder_ok"), NeonTheme.EMERALD);
-                    } else if (folderPathInput.getValue().isBlank() && config.isGoogleSignedIn()) {
-                        showToast("☁ Using Google Drive direct sync.", NeonTheme.CYAN);
-                    } else {
-                        showToast(tr("screen.fabricp2p.shared.toast_folder_invalid"), NeonTheme.CRIMSON);
-                    }
+                    showToast(tr("screen.fabricp2p.shared.toast_folder_ok"), NeonTheme.EMERALD);
                 }
         );
         this.addRenderableWidget(saveFolderButton);
@@ -191,7 +216,7 @@ public class SharedWorldsScreen extends Screen {
 
         this.nextWorldButton = new NeonButton(
                 left + panelW - 80, worldBtnY, 70, 20,
-                Component.literal("Next ▸"),
+                Component.translatable("screen.fabricp2p.shared.btn_next"),
                 NeonTheme.SLATE,
                 () -> {
                     if (!worlds.isEmpty()) {
@@ -227,6 +252,41 @@ public class SharedWorldsScreen extends Screen {
         refreshWorldsListAsync(false);
     }
 
+    private static String safeHostName(String name) {
+        return (name != null && !name.isBlank()) ? name : "Host";
+    }
+
+    private static String extractErrorMessage(Throwable err) {
+        if (err == null) return "Unknown error";
+        Throwable cause = (err instanceof CompletionException && err.getCause() != null) ? err.getCause() : err;
+        String msg = cause.getMessage();
+        return (msg != null && !msg.isBlank()) ? msg : cause.getClass().getSimpleName();
+    }
+
+    private String truncatePlain(String text, int maxWidth) {
+        if (text == null || maxWidth <= 0) return "";
+        if (this.font.width(text) <= maxWidth) return text;
+        int ellW = this.font.width("...");
+        if (maxWidth <= ellW) {
+            return this.font.plainSubstrByWidth(text, maxWidth);
+        }
+        return this.font.plainSubstrByWidth(text, maxWidth - ellW) + "...";
+    }
+
+    private String truncateBold(String text, int maxWidth) {
+        if (text == null || maxWidth <= 0) return "";
+        if (this.font.width(Component.literal(text).withStyle(ChatFormatting.BOLD)) <= maxWidth) return text;
+        int ellW = this.font.width(Component.literal("...").withStyle(ChatFormatting.BOLD));
+        if (maxWidth <= ellW) {
+            return this.font.plainSubstrByWidth(text, maxWidth);
+        }
+        String trimmed = this.font.plainSubstrByWidth(text, Math.max(8, maxWidth - ellW));
+        while (!trimmed.isEmpty() && this.font.width(Component.literal(trimmed + "...").withStyle(ChatFormatting.BOLD)) > maxWidth) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed + "...";
+    }
+
     /**
      * Fetches shared worlds asynchronously so Google Drive API calls never stall Minecraft's render thread.
      */
@@ -243,11 +303,16 @@ public class SharedWorldsScreen extends Screen {
         this.loadingWorlds = true;
         updateWidgetStates();
 
-        CompletableFuture.supplyAsync(manager::listSharedWorlds).thenAccept(result -> {
+        CompletableFuture.supplyAsync(manager::listSharedWorlds).whenComplete((result, err) -> {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
                 if (refreshGeneration.get() != gen) return;
                 this.loadingWorlds = false;
+                if (err != null) {
+                    updateWidgetStates();
+                    showToast(tr("screen.fabricp2p.shared.toast_refresh_error", extractErrorMessage(err)), NeonTheme.CRIMSON);
+                    return;
+                }
                 this.worlds = result != null ? result : new ArrayList<>();
                 if (selectedWorldIndex >= this.worlds.size()) {
                     selectedWorldIndex = 0;
@@ -274,22 +339,31 @@ public class SharedWorldsScreen extends Screen {
         if (entry.live() && entry.liveRoomCode() != null) {
             RoomCodeHelper.ConnectionTarget target = RoomCodeHelper.parseInput(entry.liveRoomCode());
             if (target == null) {
-                showToast("⚠ Invalid live room code in lockfile.", NeonTheme.CRIMSON);
+                showToast(tr("screen.fabricp2p.shared.toast_invalid_lock_code"), NeonTheme.CRIMSON);
                 return;
             }
             if (target.isUdpHolePunch()) {
+                String hostName = safeHostName(entry.liveHostName());
                 this.busy = true;
                 updateWidgetStates();
-                showToast("⚡ Joining " + entry.liveHostName() + " via UDP Hole Punch...", NeonTheme.CYAN);
-                UdpHolePunchService.getInstance().startClientProxyAsync(target.host()).thenAccept(res -> {
+                showToast(tr("screen.fabricp2p.shared.toast_joining_udp", hostName), NeonTheme.CYAN);
+                UdpHolePunchService.getInstance().startClientProxyAsync(target.host()).whenComplete((res, err) -> {
                     if (this.minecraft == null) return;
                     this.minecraft.execute(() -> {
                         this.busy = false;
                         updateWidgetStates();
-                        if (res.success()) {
+                        if (err != null) {
+                            showToast(tr("screen.fabricp2p.shared.toast_udp_fail", extractErrorMessage(err)), NeonTheme.CRIMSON);
+                            return;
+                        }
+                        if (res != null && res.success()) {
+                            if (this.minecraft.level != null) {
+                                P2PNetworkManager.getInstance().suppressNextClientProxyDisconnectCleanup();
+                            }
                             connectToAddress("Shared: " + entry.worldName(), "127.0.0.1", res.localPort());
                         } else {
-                            showToast("⚠ UDP Join failed: " + res.error(), NeonTheme.CRIMSON);
+                            String reason = (res != null && res.error() != null) ? res.error() : "timeout";
+                            showToast(tr("screen.fabricp2p.shared.toast_udp_fail", reason), NeonTheme.CRIMSON);
                         }
                     });
                 });
@@ -301,24 +375,34 @@ public class SharedWorldsScreen extends Screen {
 
         this.busy = true;
         updateWidgetStates();
-        showToast("☁ Pulling latest '" + entry.worldName() + "' (Rev #" + entry.revision() + ")...", NeonTheme.CYAN);
-        manager.pullWorldToLocalSavesAsync(this.minecraft, entry.worldName()).thenAccept(res -> {
+        showToast(tr("screen.fabricp2p.shared.toast_pulling", entry.worldName(), entry.revision()), NeonTheme.CYAN);
+        manager.pullWorldToLocalSavesAsync(this.minecraft, entry.worldName()).whenComplete((res, err) -> {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
                 this.busy = false;
                 refreshWorldsListAsync(false);
                 updateWidgetStates();
-                showToast(res.success() ? ("✅ " + res.message()) : ("⚠ " + res.message()),
-                        res.success() ? NeonTheme.EMERALD : NeonTheme.CRIMSON);
+                if (err != null) {
+                    showToast("⚠ " + extractErrorMessage(err), NeonTheme.CRIMSON);
+                } else if (res != null) {
+                    showToast(res.success() ? ("✅ " + res.message()) : ("⚠ " + res.message()),
+                            res.success() ? NeonTheme.EMERALD : NeonTheme.CRIMSON);
+                } else {
+                    showToast(tr("screen.fabricp2p.shared.toast_op_failed"), NeonTheme.CRIMSON);
+                }
             });
         });
     }
 
     private void connectToAddress(String label, String host, int port) {
         if (this.minecraft == null) return;
-        ServerData serverData = new ServerData(label, host + ":" + port, ServerData.Type.OTHER);
+        Screen returnScreen = (this.minecraft.level != null || this.parent instanceof P2PHostScreen)
+                ? new TitleScreen()
+                : this.parent;
+        String formattedAddr = RoomCodeHelper.formatHostPort(host, port);
+        ServerData serverData = new ServerData(label, formattedAddr, ServerData.Type.OTHER);
         ConnectScreen.startConnecting(
-                this.parent,
+                returnScreen,
                 this.minecraft,
                 new ServerAddress(host, port),
                 serverData,
@@ -333,22 +417,25 @@ public class SharedWorldsScreen extends Screen {
             auth.signOut();
             refreshWorldsListAsync(false);
             updateWidgetStates();
-            showToast("Signed out of Google.", NeonTheme.SLATE);
+            showToast(tr("screen.fabricp2p.shared.toast_signed_out"), NeonTheme.SLATE);
             return;
         }
         this.busy = true;
         updateWidgetStates();
-        showToast("🌐 Opening Google Account Picker in browser...", NeonTheme.CYAN);
-        auth.signInAsync().thenAccept(res -> {
+        showToast(tr("screen.fabricp2p.shared.toast_google_opening"), NeonTheme.CYAN);
+        auth.signInAsync().whenComplete((res, err) -> {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
                 this.busy = false;
                 refreshWorldsListAsync(false);
                 updateWidgetStates();
-                if (res.success()) {
-                    showToast("✅ Signed in as " + res.email() + "!", NeonTheme.EMERALD);
+                if (err != null) {
+                    showToast(tr("screen.fabricp2p.shared.toast_google_fail", extractErrorMessage(err)), NeonTheme.CRIMSON);
+                } else if (res != null && res.success()) {
+                    showToast(tr("screen.fabricp2p.shared.toast_google_ok", res.email()), NeonTheme.EMERALD);
                 } else {
-                    showToast("⚠ Google Sign-In failed: " + res.error(), NeonTheme.CRIMSON);
+                    String reason = (res != null && res.error() != null) ? res.error() : "unknown error";
+                    showToast(tr("screen.fabricp2p.shared.toast_google_fail", reason), NeonTheme.CRIMSON);
                 }
             });
         });
@@ -358,15 +445,21 @@ public class SharedWorldsScreen extends Screen {
         if (this.minecraft == null || busy) return;
         this.busy = true;
         updateWidgetStates();
-        showToast("☁ Syncing changed world files (SHA-256 delta)...", NeonTheme.VIOLET);
-        manager.uploadCurrentWorldAsync(this.minecraft).thenAccept(res -> {
+        showToast(tr("screen.fabricp2p.shared.toast_uploading"), NeonTheme.VIOLET);
+        manager.uploadCurrentWorldAsync(this.minecraft).whenComplete((res, err) -> {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
                 this.busy = false;
                 refreshWorldsListAsync(false);
                 updateWidgetStates();
-                showToast(res.success() ? ("✅ " + res.message()) : ("⚠ " + res.message()),
-                        res.success() ? NeonTheme.EMERALD : NeonTheme.CRIMSON);
+                if (err != null) {
+                    showToast("⚠ " + extractErrorMessage(err), NeonTheme.CRIMSON);
+                } else if (res != null) {
+                    showToast(res.success() ? ("✅ " + res.message()) : ("⚠ " + res.message()),
+                            res.success() ? NeonTheme.EMERALD : NeonTheme.CRIMSON);
+                } else {
+                    showToast(tr("screen.fabricp2p.shared.toast_op_failed"), NeonTheme.CRIMSON);
+                }
             });
         });
     }
@@ -382,10 +475,16 @@ public class SharedWorldsScreen extends Screen {
             googleSignInButton.active = enabled && !working;
             if (GoogleAuthService.getInstance().isSigningIn()) {
                 googleSignInButton.setAccentRgb(NeonTheme.AMBER);
-                googleSignInButton.setMessage(Component.literal("⏳ WAITING FOR GOOGLE LOGIN...").withStyle(ChatFormatting.BOLD));
+                googleSignInButton.setMessage(Component.translatable("screen.fabricp2p.shared.btn_google_waiting").withStyle(ChatFormatting.BOLD));
             } else if (config.isGoogleSignedIn()) {
                 googleSignInButton.setAccentRgb(NeonTheme.EMERALD);
-                googleSignInButton.setMessage(Component.literal("● Google: " + config.getGoogleUserEmail() + " (Sign Out)")
+                String prefix = tr("screen.fabricp2p.shared.btn_google_signed_in_prefix");
+                String suffix = tr("screen.fabricp2p.shared.btn_google_signed_in_suffix");
+                String email = config.getGoogleUserEmail();
+                int maxTotalW = Math.max(60, googleSignInButton.getWidth() - 24);
+                int fixedW = this.font.width(Component.literal(prefix + suffix).withStyle(ChatFormatting.BOLD));
+                String displayEmail = truncateBold(email, Math.max(24, maxTotalW - fixedW));
+                googleSignInButton.setMessage(Component.literal(prefix + displayEmail + suffix)
                         .withStyle(ChatFormatting.BOLD));
             } else {
                 googleSignInButton.setAccentRgb(NeonTheme.CYAN);
@@ -412,14 +511,21 @@ public class SharedWorldsScreen extends Screen {
                 worldActionButton.active = true;
                 worldActionButton.setAccentRgb(NeonTheme.EMERALD);
                 worldActionButton.setPulsingBeacon(true);
-                worldActionButton.setMessage(Component.literal("▶ JOIN " + entry.liveHostName().toUpperCase() + "'S LIVE WORLD")
-                        .withStyle(ChatFormatting.BOLD));
+                String hostName = safeHostName(entry.liveHostName()).toUpperCase();
+                String liveLabel = truncateBold(
+                        tr("screen.fabricp2p.shared.btn_join_live", hostName),
+                        Math.max(40, worldActionButton.getWidth() - 26)
+                );
+                worldActionButton.setMessage(Component.literal(liveLabel).withStyle(ChatFormatting.BOLD));
             } else {
                 worldActionButton.active = true;
                 worldActionButton.setAccentRgb(NeonTheme.CYAN);
                 worldActionButton.setPulsingBeacon(false);
-                worldActionButton.setMessage(Component.literal("☁ PULL LATEST (REV #" + entry.revision() + ") TO SAVES")
-                        .withStyle(ChatFormatting.BOLD));
+                String pullLabel = truncateBold(
+                        tr("screen.fabricp2p.shared.btn_pull_rev", entry.revision()),
+                        Math.max(40, worldActionButton.getWidth() - 18)
+                );
+                worldActionButton.setMessage(Component.literal(pullLabel).withStyle(ChatFormatting.BOLD));
             }
         }
     }
@@ -453,12 +559,12 @@ public class SharedWorldsScreen extends Screen {
                     left + logoSize + 10, headerY + 15, NeonTheme.TEXT_SECONDARY, false);
         }
         NeonRenderUtils.drawBadge(graphics, this.font, left + panelW - 58, headerY + (compact ? 4 : 6),
-                config.isEnabled() ? "ON" : "OFF",
+                tr(config.isEnabled() ? "screen.fabricp2p.shared.badge_on" : "screen.fabricp2p.shared.badge_off"),
                 config.isEnabled() ? NeonTheme.EMERALD : NeonTheme.SLATE,
                 config.isEnabled(), timeSec);
 
         // Local Sync Folder Frame
-        graphics.text(this.font, tr("screen.fabricp2p.shared.folder_label"),
+        graphics.text(this.font, truncatePlain(tr("screen.fabricp2p.shared.folder_label"), Math.max(40, panelW)),
                 left, folderY - 10, NeonTheme.TEXT_SECONDARY, false);
 
         int inputW = panelW - 110;
@@ -469,31 +575,39 @@ public class SharedWorldsScreen extends Screen {
 
         // Shared World Card
         int worldCardH = compact ? 60 : 66;
+        int maxCardTextW = Math.max(40, panelW - 20);
         SharedWorldManager.SharedWorldEntry entry = getSelectedWorld();
         int cardAccent = (entry != null && entry.live()) ? NeonTheme.EMERALD : accent;
         NeonRenderUtils.drawGlassCard(graphics, left, worldCardY, panelW, worldCardH, cardAccent, entry != null && entry.live(), timeSec);
 
         if (!config.isEnabled()) {
-            graphics.centeredText(this.font, tr("screen.fabricp2p.shared.disabled_hint"),
+            graphics.centeredText(this.font, truncatePlain(tr("screen.fabricp2p.shared.disabled_hint"), maxCardTextW),
                     cx, worldCardY + 14, NeonTheme.TEXT_MUTED);
         } else if (!backendReady) {
-            graphics.centeredText(this.font, tr("screen.fabricp2p.shared.setup_hint"),
+            graphics.centeredText(this.font, truncatePlain(tr("screen.fabricp2p.shared.setup_hint"), maxCardTextW),
                     cx, worldCardY + 14, NeonTheme.withAlpha(NeonTheme.AMBER, 230));
         } else if (loadingWorlds) {
-            graphics.centeredText(this.font, tr("screen.fabricp2p.shared.loading_hint"),
+            graphics.centeredText(this.font, truncatePlain(tr("screen.fabricp2p.shared.loading_hint"), maxCardTextW),
                     cx, worldCardY + 10, NeonTheme.withAlpha(NeonTheme.CYAN, 235));
             NeonRenderUtils.drawScannerBar(graphics, left + 20, worldCardY + 24, panelW - 40, NeonTheme.CYAN, timeSec);
         } else if (entry == null) {
-            graphics.centeredText(this.font, tr("screen.fabricp2p.shared.empty_hint"),
+            graphics.centeredText(this.font, truncatePlain(tr("screen.fabricp2p.shared.empty_hint"), maxCardTextW),
                     cx, worldCardY + 14, NeonTheme.TEXT_SECONDARY);
         } else {
             String indexTag = worlds.size() > 1 ? (" (" + (selectedWorldIndex + 1) + "/" + worlds.size() + ")") : "";
-            graphics.text(this.font, Component.literal("☁ " + entry.worldName() + indexTag).withStyle(ChatFormatting.BOLD),
+            String titlePrefix = "☁ ";
+            int fixedTitleW = this.font.width(Component.literal(titlePrefix + indexTag).withStyle(ChatFormatting.BOLD));
+            String worldName = entry.worldName() != null ? entry.worldName() : "";
+            String displayWorldName = truncateBold(worldName, Math.max(24, maxCardTextW - fixedTitleW));
+            graphics.text(this.font, Component.literal(titlePrefix + displayWorldName + indexTag).withStyle(ChatFormatting.BOLD),
                     left + 10, worldCardY + 7, NeonTheme.TEXT_PRIMARY, true);
 
+            String hostName = safeHostName(entry.liveHostName());
+            String lastHost = (entry.lastHost() != null && !entry.lastHost().isBlank()) ? entry.lastHost() : "Unknown";
             String statusStr = entry.live()
-                    ? ("● LIVE — Hosted by " + entry.liveHostName() + " • Rev #" + entry.revision())
-                    : ("○ STANDBY — Last host: " + entry.lastHost() + " • Rev #" + entry.revision());
+                    ? tr("screen.fabricp2p.shared.status_live", hostName, entry.revision())
+                    : tr("screen.fabricp2p.shared.status_standby", lastHost, entry.revision());
+            statusStr = truncatePlain(statusStr, maxCardTextW);
             graphics.text(this.font, statusStr,
                     left + 10, worldCardY + 20,
                     NeonTheme.withAlpha(entry.live() ? NeonTheme.EMERALD : NeonTheme.TEXT_SECONDARY, 255), entry.live());

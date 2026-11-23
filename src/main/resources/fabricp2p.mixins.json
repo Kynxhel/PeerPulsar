@@ -4,10 +4,10 @@
   "package": "com.p2pworld.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [
-    "IntegratedServerMixin",
     "ServerLoginPacketListenerImplMixin"
   ],
   "client": [
+    "IntegratedServerMixin",
     "PauseScreenMixin",
     "TitleScreenMixin",
     "JoinMultiplayerScreenMixin"

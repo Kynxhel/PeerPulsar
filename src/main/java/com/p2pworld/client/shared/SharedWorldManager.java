@@ -16,11 +16,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -28,6 +32,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -38,12 +44,21 @@ import java.util.stream.Stream;
 public class SharedWorldManager {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final long STALE_LOCK_MS = 45_000L;
+    private static final long FUTURE_CLOCK_SKEW_MS = 30_000L;
+    private static final long IN_MEMORY_SNAPSHOT_LIMIT = 4L * 1024L * 1024L;
     private static final String LOCK_FILE = "session.lock.json";
     private static final String META_FILE = "meta.json";
     private static final String MANIFEST_FILE = "manifest.json";
     private static final String FILES_SUBDIR = "files";
+    private static final Pattern WINDOWS_RESERVED_NAME = Pattern.compile(
+            "^(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\\s*\\..*)?$"
+    );
 
     private static SharedWorldManager instance;
+
+    private final Object syncLock = new Object();
+    private final Object heartbeatLock = new Object();
+    private final AtomicBoolean syncInProgress = new AtomicBoolean(false);
 
     private volatile String activeHostedWorldName = null;
     private volatile Path activeHostedLocalDir = null;
@@ -62,8 +77,13 @@ public class SharedWorldManager {
         return instance;
     }
 
+    public boolean isUsingGoogleDrive() {
+        SharedWorldConfig cfg = SharedWorldConfig.getInstance();
+        return cfg.isGoogleSignedIn() && !cfg.hasValidSyncFolder();
+    }
+
     public boolean isSyncing() {
-        return syncing;
+        return syncInProgress.get();
     }
 
     public String getActiveHostedWorldName() {
@@ -78,10 +98,13 @@ public class SharedWorldManager {
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
         if (!cfg.isEnabled()) return false;
         String worldName = sanitizeName(server.getWorldPath(LevelResource.ROOT).normalize().getFileName().toString());
+        if (worldName.isEmpty()) return false;
         if (worldName.equals(activeHostedWorldName)) return true;
         if (worldName.equals(cfg.getLastSharedWorldName())) return true;
-        if (cfg.getLinkedDriveFolderId(worldName) != null) return true;
-        if (knownDriveWorldNames.contains(worldName)) return true;
+        if (isUsingGoogleDrive()) {
+            if (cfg.getLinkedDriveFolderId(worldName) != null) return true;
+            return knownDriveWorldNames.contains(worldName);
+        }
         if (cfg.hasValidSyncFolder()) {
             Path sharedDir = Path.of(cfg.getSyncFolderPath()).resolve(worldName).normalize();
             return Files.exists(sharedDir);
@@ -117,7 +140,7 @@ public class SharedWorldManager {
             return results;
         }
 
-        if (cfg.isGoogleSignedIn() && !cfg.hasValidSyncFolder()) {
+        if (isUsingGoogleDrive()) {
             try {
                 GoogleDriveService drive = GoogleDriveService.getInstance();
                 String rootId = drive.getOrCreateRootFolderId();
@@ -149,14 +172,15 @@ public class SharedWorldManager {
                         SessionLock lock = parseJson(lockJson, SessionLock.class);
 
                         int rev = (meta != null) ? meta.revision : 1;
-                        String lastHost = (meta != null && meta.lastHost != null) ? meta.lastHost : "Google Drive";
+                        String lastHost = (meta != null && meta.lastHost != null && !meta.lastHost.isBlank())
+                                ? meta.lastHost
+                                : "Google Drive";
                         long updatedAt = (meta != null) ? meta.updatedAtMs : 0L;
-                        boolean live = lock != null && lock.active && lock.roomCode != null && !lock.roomCode.isBlank()
-                                && (System.currentTimeMillis() - lock.heartbeatMs) < STALE_LOCK_MS;
+                        boolean live = isLockLive(lock);
 
                         results.add(new SharedWorldEntry(
-                                worldName, rev, lastHost, updatedAt, true,
-                                live, live ? lock.hostName : null, live ? lock.roomCode : null, live ? lock.connectionMode : null
+                                worldName, rev, lastHost, updatedAt, meta != null,
+                                live, live ? resolveLockHostName(lock) : null, live ? lock.roomCode : null, live ? lock.connectionMode : null
                         ));
                     } catch (Exception e) {
                         FabricP2PMod.LOGGER.warn("[SharedWorlds] Skipping Drive world '{}': {}", worldName, e.getMessage());
@@ -192,14 +216,11 @@ public class SharedWorldManager {
                 SessionLock lock = readJson(lockPath, SessionLock.class);
 
                 int rev = (meta != null) ? meta.revision : 1;
-                String lastHost = (meta != null && meta.lastHost != null) ? meta.lastHost : "Unknown";
+                String lastHost = (meta != null && meta.lastHost != null && !meta.lastHost.isBlank())
+                        ? meta.lastHost
+                        : "Unknown";
                 long updatedAt = (meta != null) ? meta.updatedAtMs : 0L;
-
-                boolean live = lock != null
-                        && lock.active
-                        && lock.roomCode != null
-                        && !lock.roomCode.isBlank()
-                        && (System.currentTimeMillis() - lock.heartbeatMs) < STALE_LOCK_MS;
+                boolean live = isLockLive(lock);
 
                 results.add(new SharedWorldEntry(
                         worldName,
@@ -208,7 +229,7 @@ public class SharedWorldManager {
                         updatedAt,
                         Files.exists(manifestPath),
                         live,
-                        live ? lock.hostName : null,
+                        live ? resolveLockHostName(lock) : null,
                         live ? lock.roomCode : null,
                         live ? lock.connectionMode : null
                 ));
@@ -231,7 +252,8 @@ public class SharedWorldManager {
      */
     public CompletableFuture<SyncOpResult> uploadCurrentWorldAsync(Minecraft mc) {
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
-        if (!cfg.isEnabled() || (!cfg.hasValidSyncFolder() && !cfg.isGoogleSignedIn())) {
+        boolean useDrive = isUsingGoogleDrive();
+        if (!cfg.isEnabled() || (!useDrive && !cfg.hasValidSyncFolder())) {
             return CompletableFuture.completedFuture(new SyncOpResult(false, "Sign in with Google or set a Sync Folder first."));
         }
         if (mc == null || mc.getSingleplayerServer() == null) {
@@ -239,25 +261,69 @@ public class SharedWorldManager {
         }
 
         IntegratedServer server = mc.getSingleplayerServer();
+        if (!server.isRunning() || server.isStopped()) {
+            return CompletableFuture.completedFuture(new SyncOpResult(false, "Singleplayer server is stopping or already stopped."));
+        }
+
         Path worldDir = server.getWorldPath(LevelResource.ROOT).normalize();
         String worldName = sanitizeName(worldDir.getFileName().toString());
-        String hostName = mc.getUser() != null ? mc.getUser().getName() : "Host";
+        if (worldName.isEmpty()) {
+            return CompletableFuture.completedFuture(new SyncOpResult(false, "Invalid world name."));
+        }
+        String hostName = (mc.getUser() != null && mc.getUser().getName() != null && !mc.getUser().getName().isBlank())
+                ? mc.getUser().getName()
+                : "Host";
+
+        if (!syncInProgress.compareAndSet(false, true)) {
+            return CompletableFuture.completedFuture(new SyncOpResult(false, "Another sync operation is already in progress."));
+        }
+        this.syncing = true;
 
         CompletableFuture<Void> saveFuture = new CompletableFuture<>();
-        server.execute(() -> {
-            try {
-                server.saveEverything(true, true, true);
-                saveFuture.complete(null);
-            } catch (Throwable t) {
-                saveFuture.completeExceptionally(t);
-            }
-        });
+        try {
+            server.execute(() -> {
+                try {
+                    if (!server.isRunning() || server.isStopped()) {
+                        saveFuture.completeExceptionally(new IllegalStateException("Server stopped before save could complete."));
+                        return;
+                    }
+                    server.saveEverything(true, true, true);
+                    saveFuture.complete(null);
+                } catch (Throwable t) {
+                    saveFuture.completeExceptionally(t);
+                }
+            });
+        } catch (Throwable t) {
+            syncInProgress.set(false);
+            this.syncing = false;
+            return CompletableFuture.completedFuture(new SyncOpResult(false, "Save failed before sync: " + errorMessage(t)));
+        }
 
-        return saveFuture.thenApplyAsync(v -> {
-            if (cfg.isGoogleSignedIn() && !cfg.hasValidSyncFolder()) {
-                return uploadIncrementalToGoogleDrive(worldDir, worldName, hostName);
+        return saveFuture.orTimeout(15, TimeUnit.SECONDS).handleAsync((v, saveErr) -> {
+            synchronized (syncLock) {
+                if (saveErr != null) {
+                    syncInProgress.set(false);
+                    this.syncing = false;
+                    return new SyncOpResult(false, "Save failed before sync: " + errorMessage(saveErr));
+                }
+                syncInProgress.set(true);
+                this.syncing = true;
+                try {
+                    if (useDrive) {
+                        return uploadIncrementalToGoogleDrive(worldDir, worldName, hostName);
+                    }
+                    return uploadIncrementalToLocalFolder(worldDir, worldName, hostName, true);
+                } finally {
+                    syncInProgress.set(false);
+                    this.syncing = false;
+                }
             }
-            return uploadIncrementalToLocalFolder(worldDir, worldName, hostName, true);
+        }).exceptionally(err -> {
+            synchronized (syncLock) {
+                syncInProgress.set(false);
+                this.syncing = false;
+            }
+            return new SyncOpResult(false, "Save failed before sync: " + errorMessage(err));
         });
     }
 
@@ -267,7 +333,8 @@ public class SharedWorldManager {
      */
     public CompletableFuture<SyncOpResult> pullWorldToLocalSavesAsync(Minecraft mc, String worldName) {
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
-        if (!cfg.isEnabled() || (!cfg.hasValidSyncFolder() && !cfg.isGoogleSignedIn())) {
+        boolean useDrive = isUsingGoogleDrive();
+        if (!cfg.isEnabled() || (!useDrive && !cfg.hasValidSyncFolder())) {
             return CompletableFuture.completedFuture(new SyncOpResult(false, "Sign in with Google or set a Sync Folder first."));
         }
 
@@ -293,33 +360,55 @@ public class SharedWorldManager {
             }
         }
 
-        return CompletableFuture.supplyAsync(() -> {
-            this.syncing = true;
-            try {
-                Files.createDirectories(targetWorldDir);
+        if (!syncInProgress.compareAndSet(false, true)) {
+            return CompletableFuture.completedFuture(new SyncOpResult(false, "Another sync operation is already in progress."));
+        }
+        this.syncing = true;
 
-                if (cfg.isGoogleSignedIn() && !cfg.hasValidSyncFolder()) {
-                    return pullIncrementalFromGoogleDrive(safeName, targetWorldDir);
-                } else {
-                    return pullIncrementalFromLocalFolder(cfg.getSyncFolderPath(), safeName, targetWorldDir);
+        return CompletableFuture.supplyAsync(() -> {
+            synchronized (syncLock) {
+                syncInProgress.set(true);
+                this.syncing = true;
+                try {
+                    Files.createDirectories(targetWorldDir);
+
+                    if (useDrive) {
+                        return pullIncrementalFromGoogleDrive(safeName, targetWorldDir);
+                    } else {
+                        return pullIncrementalFromLocalFolder(cfg.getSyncFolderPath(), safeName, targetWorldDir);
+                    }
+                } catch (Exception e) {
+                    FabricP2PMod.LOGGER.error("[SharedWorlds] Incremental pull failed for '{}': {}", safeName, e.getMessage());
+                    return new SyncOpResult(false, "Pull failed: " + e.getMessage());
+                } finally {
+                    syncInProgress.set(false);
+                    this.syncing = false;
                 }
-            } catch (Exception e) {
-                FabricP2PMod.LOGGER.error("[SharedWorlds] Incremental pull failed for '{}': {}", safeName, e.getMessage());
-                return new SyncOpResult(false, "Pull failed: " + e.getMessage());
-            } finally {
+            }
+        }).exceptionally(err -> {
+            synchronized (syncLock) {
+                syncInProgress.set(false);
                 this.syncing = false;
             }
+            return new SyncOpResult(false, "Pull failed: " + errorMessage(err));
         });
     }
 
     // ==================== INCREMENTAL GOOGLE DRIVE SYNC ====================
 
     private SyncOpResult uploadIncrementalToGoogleDrive(Path worldDir, String worldName, String hostName) {
-        this.syncing = true;
         try {
             GoogleDriveService drive = GoogleDriveService.getInstance();
             String worldFolderId = resolveWorldDriveFolderId(worldName, true);
             String filesFolderId = drive.getOrCreateSubfolder(worldFolderId, FILES_SUBDIR);
+
+            // Single paginated query to deduplicate uploads when recovering from an interrupted prior sync
+            Map<String, String> existingDriveFilesByName = new HashMap<>();
+            for (GoogleDriveService.DriveItem item : drive.listFilesInFolder(filesFolderId)) {
+                if (item.name() != null && !item.name().isBlank() && item.id() != null && !item.id().isBlank()) {
+                    existingDriveFilesByName.putIfAbsent(item.name(), item.id());
+                }
+            }
 
             String oldManifestJson = drive.readTextFile(worldFolderId, MANIFEST_FILE);
             WorldManifest oldManifest = parseJson(oldManifestJson, WorldManifest.class);
@@ -337,22 +426,26 @@ public class SharedWorldManager {
             List<Path> localFiles = collectWorldFiles(worldDir);
             for (Path p : localFiles) {
                 String rel = worldDir.relativize(p).toString().replace("\\", "/");
-                String sha = sha256(p);
-                long size = Files.size(p);
-
-                ManifestFile prev = oldManifest.files.get(rel);
-                if (prev != null && sha.equals(prev.sha256) && prev.driveFileId != null && !prev.driveFileId.isBlank()) {
-                    newManifest.files.put(rel, prev);
-                    skipped++;
-                } else {
-                    String existingId = (prev != null) ? prev.driveFileId : null;
-                    String fileId = drive.uploadOrUpdateFileById(filesFolderId, existingId, rel, "application/octet-stream", p);
-                    ManifestFile mf = new ManifestFile();
-                    mf.sha256 = sha;
-                    mf.size = size;
-                    mf.driveFileId = fileId;
-                    newManifest.files.put(rel, mf);
-                    uploaded++;
+                try (FileSnapshot snap = FileSnapshot.capture(p)) {
+                    ManifestFile prev = oldManifest.files.get(rel);
+                    if (prev != null && snap.sha256.equals(prev.sha256) && prev.driveFileId != null && !prev.driveFileId.isBlank()) {
+                        newManifest.files.put(rel, prev);
+                        skipped++;
+                    } else {
+                        String existingId = (prev != null && prev.driveFileId != null && !prev.driveFileId.isBlank())
+                                ? prev.driveFileId
+                                : existingDriveFilesByName.get(rel);
+                        String fileId = (snap.bytes != null)
+                                ? drive.uploadOrUpdateBytesById(filesFolderId, existingId, rel, "application/octet-stream", snap.bytes)
+                                : drive.uploadOrUpdateFileById(filesFolderId, existingId, rel, "application/octet-stream", snap.tempFile);
+                        existingDriveFilesByName.put(rel, fileId);
+                        ManifestFile mf = new ManifestFile();
+                        mf.sha256 = snap.sha256;
+                        mf.size = snap.size;
+                        mf.driveFileId = fileId;
+                        newManifest.files.put(rel, mf);
+                        uploaded++;
+                    }
                 }
             }
 
@@ -379,8 +472,6 @@ public class SharedWorldManager {
             return new SyncOpResult(true, "Drive Sync Rev #" + newManifest.revision + ": " + uploaded + " changed, " + skipped + " skipped!");
         } catch (Exception e) {
             return new SyncOpResult(false, "Google Drive sync failed: " + e.getMessage());
-        } finally {
-            this.syncing = false;
         }
     }
 
@@ -393,8 +484,8 @@ public class SharedWorldManager {
 
         String lockJson = drive.readTextFile(worldFolderId, LOCK_FILE);
         SessionLock lock = parseJson(lockJson, SessionLock.class);
-        if (lock != null && lock.active && (System.currentTimeMillis() - lock.heartbeatMs) < STALE_LOCK_MS) {
-            return new SyncOpResult(false, "World is currently hosted by " + lock.hostName + "! Join them instead.");
+        if (isLockFresh(lock)) {
+            return new SyncOpResult(false, "World is currently hosted by " + resolveLockHostName(lock) + "! Join them instead.");
         }
 
         String manifestJson = drive.readTextFile(worldFolderId, MANIFEST_FILE);
@@ -415,14 +506,21 @@ public class SharedWorldManager {
         for (Map.Entry<String, ManifestFile> entry : manifest.files.entrySet()) {
             String rel = entry.getKey();
             ManifestFile mf = entry.getValue();
-            if (rel == null || mf == null) continue;
+            if (rel == null || mf == null || isSessionLockEntry(rel)) continue;
             Path dest = normalizedRoot.resolve(rel).normalize();
             if (!dest.startsWith(normalizedRoot) || dest.equals(normalizedRoot)) continue;
+            if (dest.getFileName() != null && dest.getFileName().toString().equalsIgnoreCase("session.lock")) continue;
             expectedFiles.add(dest);
 
-            if (Files.exists(dest) && mf.sha256 != null && mf.sha256.equals(sha256(dest))) {
-                skipped++;
-                continue;
+            if (Files.exists(dest) && mf.sha256 != null && !mf.sha256.isBlank()) {
+                try {
+                    if (mf.sha256.equals(sha256(dest))) {
+                        skipped++;
+                        continue;
+                    }
+                } catch (IOException ignored) {
+                    // Existing local file unreadable; re-download below
+                }
             }
             if (drive.downloadFileById(mf.driveFileId, dest)) {
                 downloaded++;
@@ -445,7 +543,6 @@ public class SharedWorldManager {
 
     private SyncOpResult uploadIncrementalToLocalFolder(Path worldDir, String worldName, String hostName, boolean preserveLockIfActive) {
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
-        this.syncing = true;
         try {
             Path syncRoot = Path.of(cfg.getSyncFolderPath()).toAbsolutePath().normalize();
             Path sharedDir = syncRoot.resolve(worldName).normalize();
@@ -470,24 +567,26 @@ public class SharedWorldManager {
 
             for (Path p : collectWorldFiles(worldDir)) {
                 String rel = worldDir.relativize(p).toString().replace("\\", "/");
-                String sha = sha256(p);
-                long size = Files.size(p);
-
                 Path sharedCopy = filesRoot.resolve(rel).normalize();
                 if (!sharedCopy.startsWith(filesRoot) || sharedCopy.equals(filesRoot)) continue;
 
-                ManifestFile prev = oldManifest.files.get(rel);
-                if (prev != null && sha.equals(prev.sha256) && Files.exists(sharedCopy)) {
-                    newManifest.files.put(rel, prev);
-                    skipped++;
-                } else {
-                    Files.createDirectories(sharedCopy.getParent());
-                    Files.copy(p, sharedCopy, StandardCopyOption.REPLACE_EXISTING);
-                    ManifestFile mf = new ManifestFile();
-                    mf.sha256 = sha;
-                    mf.size = size;
-                    newManifest.files.put(rel, mf);
-                    copied++;
+                try (FileSnapshot snap = FileSnapshot.capture(p)) {
+                    ManifestFile prev = oldManifest.files.get(rel);
+                    if (prev != null && snap.sha256.equals(prev.sha256) && Files.exists(sharedCopy)) {
+                        newManifest.files.put(rel, prev);
+                        skipped++;
+                    } else {
+                        if (snap.bytes != null) {
+                            writeBytesAtomically(snap.bytes, sharedCopy);
+                        } else {
+                            copyFileAtomically(snap.tempFile, sharedCopy);
+                        }
+                        ManifestFile mf = new ManifestFile();
+                        mf.sha256 = snap.sha256;
+                        mf.size = snap.size;
+                        newManifest.files.put(rel, mf);
+                        copied++;
+                    }
                 }
             }
 
@@ -501,14 +600,14 @@ public class SharedWorldManager {
                 }
             }
 
-            Files.writeString(manifestPath, GSON.toJson(newManifest), StandardCharsets.UTF_8);
+            writeBytesAtomically(GSON.toJson(newManifest).getBytes(StandardCharsets.UTF_8), manifestPath);
 
             WorldMeta meta = new WorldMeta();
             meta.worldName = worldName;
             meta.revision = newManifest.revision;
             meta.lastHost = hostName;
             meta.updatedAtMs = newManifest.updatedAtMs;
-            Files.writeString(sharedDir.resolve(META_FILE), GSON.toJson(meta), StandardCharsets.UTF_8);
+            writeBytesAtomically(GSON.toJson(meta).getBytes(StandardCharsets.UTF_8), sharedDir.resolve(META_FILE));
 
             cfg.setLastSharedWorldName(worldName);
             if (!preserveLockIfActive) {
@@ -520,8 +619,6 @@ public class SharedWorldManager {
             return new SyncOpResult(true, "Synced Rev #" + newManifest.revision + ": " + copied + " changed, " + skipped + " skipped!");
         } catch (Exception e) {
             return new SyncOpResult(false, "Sync failed: " + e.getMessage());
-        } finally {
-            this.syncing = false;
         }
     }
 
@@ -532,8 +629,8 @@ public class SharedWorldManager {
             return new SyncOpResult(false, "Invalid world path.");
         }
         SessionLock lock = readJson(sharedDir.resolve(LOCK_FILE), SessionLock.class);
-        if (lock != null && lock.active && (System.currentTimeMillis() - lock.heartbeatMs) < STALE_LOCK_MS) {
-            return new SyncOpResult(false, "World is currently hosted by " + lock.hostName + "! Join them instead.");
+        if (isLockFresh(lock)) {
+            return new SyncOpResult(false, "World is currently hosted by " + resolveLockHostName(lock) + "! Join them instead.");
         }
 
         WorldManifest manifest = readJson(sharedDir.resolve(MANIFEST_FILE), WorldManifest.class);
@@ -551,22 +648,28 @@ public class SharedWorldManager {
         for (Map.Entry<String, ManifestFile> entry : manifest.files.entrySet()) {
             String rel = entry.getKey();
             ManifestFile mf = entry.getValue();
-            if (rel == null || mf == null) continue;
+            if (rel == null || mf == null || isSessionLockEntry(rel)) continue;
             Path src = filesRoot.resolve(rel).normalize();
             Path dest = normalizedRoot.resolve(rel).normalize();
             if (!src.startsWith(filesRoot) || !dest.startsWith(normalizedRoot) || dest.equals(normalizedRoot)) continue;
+            if (dest.getFileName() != null && dest.getFileName().toString().equalsIgnoreCase("session.lock")) continue;
             if (!Files.exists(src)) {
                 missing++;
                 continue;
             }
             expectedFiles.add(dest);
 
-            if (Files.exists(dest) && mf.sha256 != null && mf.sha256.equals(sha256(dest))) {
-                skipped++;
-                continue;
+            if (Files.exists(dest) && mf.sha256 != null && !mf.sha256.isBlank()) {
+                try {
+                    if (mf.sha256.equals(sha256(dest))) {
+                        skipped++;
+                        continue;
+                    }
+                } catch (IOException ignored) {
+                    // Existing local file unreadable; recopy below
+                }
             }
-            Files.createDirectories(dest.getParent());
-            Files.copy(src, dest, StandardCopyOption.REPLACE_EXISTING);
+            copyFileAtomically(src, dest);
             copied++;
         }
 
@@ -596,7 +699,8 @@ public class SharedWorldManager {
 
     public void onP2PHostStarted(Minecraft mc, String roomCode, P2PNetworkManager.ActiveHostingMode mode) {
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
-        if (!cfg.isEnabled() || (!cfg.hasValidSyncFolder() && !cfg.isGoogleSignedIn())
+        boolean useDrive = isUsingGoogleDrive();
+        if (!cfg.isEnabled() || (!useDrive && !cfg.hasValidSyncFolder())
                 || mc == null || mc.getSingleplayerServer() == null) {
             return;
         }
@@ -604,9 +708,13 @@ public class SharedWorldManager {
         IntegratedServer server = mc.getSingleplayerServer();
         Path worldDir = server.getWorldPath(LevelResource.ROOT).normalize();
         String worldName = sanitizeName(worldDir.getFileName().toString());
-        String hostName = mc.getUser() != null ? mc.getUser().getName() : "Host";
+        if (worldName.isEmpty()) {
+            return;
+        }
+        String hostName = (mc.getUser() != null && mc.getUser().getName() != null && !mc.getUser().getName().isBlank())
+                ? mc.getUser().getName()
+                : "Host";
 
-        boolean useDrive = cfg.isGoogleSignedIn() && !cfg.hasValidSyncFolder();
         if (!useDrive) {
             Path sharedDir = Path.of(cfg.getSyncFolderPath()).resolve(worldName);
             if (!Files.exists(sharedDir) && !worldName.equals(cfg.getLastSharedWorldName())) {
@@ -633,53 +741,66 @@ public class SharedWorldManager {
         this.activeRoomCode = roomCode;
         this.activeModeName = mode.name();
 
-        stopHeartbeat();
-        this.heartbeatExec = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "FabricP2P-SharedWorld-Heartbeat");
-            t.setDaemon(true);
-            return t;
-        });
+        ScheduledExecutorService newExec;
+        synchronized (heartbeatLock) {
+            stopHeartbeat();
+            newExec = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "FabricP2P-SharedWorld-Heartbeat");
+                t.setDaemon(true);
+                return t;
+            });
+            this.heartbeatExec = newExec;
+        }
 
         Runnable publishLock = () -> {
-            if (activeHostedWorldName == null || activeRoomCode == null) return;
+            String currentWorld = activeHostedWorldName;
+            String currentRoom = activeRoomCode;
+            String currentMode = activeModeName;
+            if (currentWorld == null || currentRoom == null) return;
             if (useDrive) {
-                writeDriveSessionLock(worldName, true, hostName, activeRoomCode, activeModeName);
+                writeDriveSessionLock(worldName, true, hostName, currentRoom, currentMode);
             } else {
-                writeSessionLock(Path.of(cfg.getSyncFolderPath()).resolve(worldName), true, hostName, activeRoomCode, activeModeName, worldName);
+                writeSessionLock(Path.of(cfg.getSyncFolderPath()).resolve(worldName), true, hostName, currentRoom, currentMode, worldName);
             }
         };
-        this.heartbeatExec.scheduleAtFixedRate(publishLock, 0, 12, TimeUnit.SECONDS);
+        newExec.scheduleAtFixedRate(publishLock, 0, 12, TimeUnit.SECONDS);
     }
 
     public void onP2PHostStopped(Minecraft mc) {
-        stopHeartbeat();
         String worldName = this.activeHostedWorldName;
         Path worldDir = this.activeHostedLocalDir;
         this.activeHostedWorldName = null;
         this.activeHostedLocalDir = null;
         this.activeRoomCode = null;
         this.activeModeName = null;
+        ScheduledExecutorService stoppedHeartbeat = stopHeartbeat();
 
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
-        if (worldName == null || !cfg.isEnabled() || (!cfg.hasValidSyncFolder() && !cfg.isGoogleSignedIn())) {
+        boolean useDrive = isUsingGoogleDrive();
+        if (worldName == null || !cfg.isEnabled() || (!useDrive && !cfg.hasValidSyncFolder())) {
             return;
         }
 
-        boolean useDrive = cfg.isGoogleSignedIn() && !cfg.hasValidSyncFolder();
-        String hostName = (mc != null && mc.getUser() != null) ? mc.getUser().getName() : "Host";
+        String hostName = (mc != null && mc.getUser() != null && mc.getUser().getName() != null && !mc.getUser().getName().isBlank())
+                ? mc.getUser().getName()
+                : "Host";
 
         // Trigger world flush if server is still running (e.g. clicking "Stop P2P Host" in-game)
         IntegratedServer runningServer = (mc != null) ? mc.getSingleplayerServer() : null;
         CompletableFuture<Void> saveReady = new CompletableFuture<>();
         if (runningServer != null && runningServer.isRunning()) {
-            runningServer.execute(() -> {
-                try {
-                    runningServer.saveEverything(true, true, true);
-                } catch (Throwable ignored) {
-                } finally {
-                    saveReady.complete(null);
-                }
-            });
+            try {
+                runningServer.execute(() -> {
+                    try {
+                        runningServer.saveEverything(true, true, true);
+                    } catch (Throwable ignored) {
+                    } finally {
+                        saveReady.complete(null);
+                    }
+                });
+            } catch (Throwable ignored) {
+                saveReady.complete(null);
+            }
         } else {
             saveReady.complete(null);
         }
@@ -687,26 +808,49 @@ public class SharedWorldManager {
         // Use a non-daemon worker thread so closing Minecraft right after disconnecting still completes sync & lock release
         Thread exitSyncThread = new Thread(() -> {
             try {
-                try {
-                    saveReady.get(4, TimeUnit.SECONDS);
-                } catch (Exception ignored) {}
                 if (runningServer == null) {
                     Thread.sleep(1500);
+                } else {
+                    try {
+                        saveReady.get(4, TimeUnit.SECONDS);
+                    } catch (Exception ignored) {}
+                    if (!runningServer.isRunning()) {
+                        long deadline = System.currentTimeMillis() + 5_000L;
+                        while (!runningServer.isStopped() && System.currentTimeMillis() < deadline) {
+                            Thread.sleep(100);
+                        }
+                    }
                 }
+
+                // Wait for any in-flight heartbeat to terminate before syncing or releasing lock
+                awaitHeartbeatTermination(stoppedHeartbeat);
+
                 if (cfg.isAutoSyncOnExit() && worldDir != null && Files.exists(worldDir)) {
-                    if (useDrive) {
-                        uploadIncrementalToGoogleDrive(worldDir, worldName, hostName);
-                    } else {
-                        uploadIncrementalToLocalFolder(worldDir, worldName, hostName, false);
+                    synchronized (syncLock) {
+                        syncInProgress.set(true);
+                        this.syncing = true;
+                        try {
+                            if (useDrive) {
+                                uploadIncrementalToGoogleDrive(worldDir, worldName, hostName);
+                            } else {
+                                uploadIncrementalToLocalFolder(worldDir, worldName, hostName, false);
+                            }
+                        } finally {
+                            syncInProgress.set(false);
+                            this.syncing = false;
+                        }
                     }
                 }
             } catch (Exception e) {
                 FabricP2PMod.LOGGER.warn("[SharedWorlds] Auto-sync on exit failed: {}", e.getMessage());
             } finally {
-                if (useDrive) {
-                    writeDriveSessionLock(worldName, false, hostName, "", "");
-                } else {
-                    writeSessionLock(Path.of(cfg.getSyncFolderPath()).resolve(worldName), false, hostName, "", "", worldName);
+                awaitHeartbeatTermination(stoppedHeartbeat);
+                if (!worldName.equals(this.activeHostedWorldName)) {
+                    if (useDrive) {
+                        writeDriveSessionLock(worldName, false, hostName, "", "");
+                    } else {
+                        writeSessionLock(Path.of(cfg.getSyncFolderPath()).resolve(worldName), false, hostName, "", "", worldName);
+                    }
                 }
             }
         }, "FabricP2P-SharedWorld-ExitSync");
@@ -742,19 +886,102 @@ public class SharedWorldManager {
             lock.worldName = worldName;
             lock.heartbeatMs = System.currentTimeMillis();
 
-            Path tmp = sharedDir.resolve(LOCK_FILE + ".tmp");
-            Path target = sharedDir.resolve(LOCK_FILE);
-            Files.writeString(tmp, GSON.toJson(lock), StandardCharsets.UTF_8);
-            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+            writeBytesAtomically(GSON.toJson(lock).getBytes(StandardCharsets.UTF_8), sharedDir.resolve(LOCK_FILE));
         } catch (Exception e) {
             FabricP2PMod.LOGGER.warn("[SharedWorlds] Failed to write session lock: {}", e.getMessage());
         }
     }
 
-    private void stopHeartbeat() {
-        if (heartbeatExec != null) {
-            heartbeatExec.shutdownNow();
-            heartbeatExec = null;
+    private ScheduledExecutorService stopHeartbeat() {
+        ScheduledExecutorService exec;
+        synchronized (heartbeatLock) {
+            exec = this.heartbeatExec;
+            this.heartbeatExec = null;
+        }
+        if (exec != null) {
+            exec.shutdownNow();
+        }
+        return exec;
+    }
+
+    private static void awaitHeartbeatTermination(ScheduledExecutorService exec) {
+        if (exec == null || exec.isTerminated()) return;
+        try {
+            exec.awaitTermination(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static boolean isLockFresh(SessionLock lock) {
+        if (lock == null || !lock.active) return false;
+        long age = System.currentTimeMillis() - lock.heartbeatMs;
+        return age >= -FUTURE_CLOCK_SKEW_MS && age < STALE_LOCK_MS;
+    }
+
+    private static boolean isLockLive(SessionLock lock) {
+        return isLockFresh(lock) && lock.roomCode != null && !lock.roomCode.isBlank();
+    }
+
+    private static String resolveLockHostName(SessionLock lock) {
+        return (lock != null && lock.hostName != null && !lock.hostName.isBlank()) ? lock.hostName : "Host";
+    }
+
+    private static boolean isSessionLockEntry(String rel) {
+        if (rel == null) return false;
+        String normalized = rel.replace("\\", "/").toLowerCase(Locale.ROOT);
+        return normalized.equals("session.lock") || normalized.endsWith("/session.lock");
+    }
+
+    private static String errorMessage(Throwable err) {
+        Throwable cause = (err != null && err.getCause() != null) ? err.getCause() : err;
+        if (cause != null && cause.getMessage() != null && !cause.getMessage().isBlank()) {
+            return cause.getMessage();
+        }
+        return cause != null ? cause.getClass().getSimpleName() : "Unknown error";
+    }
+
+    private static void copyFileAtomically(Path source, Path dest) throws IOException {
+        Path parent = dest.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Path tmp = dest.resolveSibling(dest.getFileName().toString() + ".p2p.tmp");
+        boolean moved = false;
+        try {
+            Files.copy(source, tmp, StandardCopyOption.REPLACE_EXISTING);
+            moveReplacingAtomically(tmp, dest);
+            moved = true;
+        } finally {
+            if (!moved) {
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    private static void writeBytesAtomically(byte[] data, Path dest) throws IOException {
+        Path parent = dest.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Path tmp = dest.resolveSibling(dest.getFileName().toString() + ".p2p.tmp");
+        boolean moved = false;
+        try {
+            Files.write(tmp, data);
+            moveReplacingAtomically(tmp, dest);
+            moved = true;
+        } finally {
+            if (!moved) {
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    private static void moveReplacingAtomically(Path tmp, Path dest) throws IOException {
+        try {
+            Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException atomicFallback) {
+            Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
@@ -764,31 +991,97 @@ public class SharedWorldManager {
             for (Path p : walk.toList()) {
                 if (Files.isDirectory(p)) continue;
                 String name = p.getFileName().toString();
-                if (name.equals("session.lock")) continue;
+                if (name.equalsIgnoreCase("session.lock") || name.endsWith(".p2p.tmp")) continue;
                 list.add(p);
             }
         }
         return list;
     }
 
-    private static String sha256(Path file) {
+    private static String sha256(Path file) throws IOException {
+        MessageDigest md = newSha256();
+        byte[] buf = new byte[16384];
+        try (InputStream is = Files.newInputStream(file)) {
+            int n;
+            while ((n = is.read(buf)) != -1) {
+                md.update(buf, 0, n);
+            }
+        }
+        return toHex(md.digest());
+    }
+
+    private static String sha256Bytes(byte[] data) {
+        MessageDigest md = newSha256();
+        md.update(data);
+        return toHex(md.digest());
+    }
+
+    private static MessageDigest newSha256() {
         try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] buf = new byte[16384];
-            try (InputStream is = Files.newInputStream(file)) {
-                int n;
-                while ((n = is.read(buf)) != -1) {
-                    md.update(buf, 0, n);
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 algorithm unavailable", e);
+        }
+    }
+
+    private static String toHex(byte[] digest) {
+        StringBuilder sb = new StringBuilder(digest.length * 2);
+        for (byte b : digest) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
+    }
+
+    private static final class FileSnapshot implements AutoCloseable {
+        final byte[] bytes;
+        final Path tempFile;
+        final long size;
+        final String sha256;
+
+        private FileSnapshot(byte[] bytes, Path tempFile, long size, String sha256) {
+            this.bytes = bytes;
+            this.tempFile = tempFile;
+            this.size = size;
+            this.sha256 = sha256;
+        }
+
+        static FileSnapshot capture(Path source) throws IOException {
+            long initialSize = Files.size(source);
+            if (initialSize <= IN_MEMORY_SNAPSHOT_LIMIT) {
+                byte[] data = Files.readAllBytes(source);
+                String hash = sha256Bytes(data);
+                if (data.length <= IN_MEMORY_SNAPSHOT_LIMIT) {
+                    return new FileSnapshot(data, null, data.length, hash);
+                }
+                Path tmp = Files.createTempFile("fp2p-sync-", ".tmp");
+                try {
+                    Files.write(tmp, data);
+                    return new FileSnapshot(null, tmp, data.length, hash);
+                } catch (Throwable t) {
+                    try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+                    throw t;
+                }
+            } else {
+                Path tmp = Files.createTempFile("fp2p-sync-", ".tmp");
+                try {
+                    Files.copy(source, tmp, StandardCopyOption.REPLACE_EXISTING);
+                    long snapSize = Files.size(tmp);
+                    String hash = sha256(tmp);
+                    return new FileSnapshot(null, tmp, snapSize, hash);
+                } catch (Throwable t) {
+                    try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+                    throw t;
                 }
             }
-            byte[] digest = md.digest();
-            StringBuilder sb = new StringBuilder(digest.length * 2);
-            for (byte b : digest) {
-                sb.append(String.format("%02x", b));
+        }
+
+        @Override
+        public void close() {
+            if (tempFile != null) {
+                try {
+                    Files.deleteIfExists(tempFile);
+                } catch (IOException ignored) {}
             }
-            return sb.toString();
-        } catch (Exception e) {
-            return "";
         }
     }
 
@@ -812,12 +1105,20 @@ public class SharedWorldManager {
 
     public static String sanitizeName(String name) {
         if (name == null) return "";
-        String cleaned = name.replaceAll("[^a-zA-Z0-9._ -]", "_").trim();
+        String normalized = Normalizer.normalize(name, Normalizer.Form.NFC);
+        String cleaned = normalized.replaceAll("[^\\p{L}\\p{N}._ -]", "_").trim();
         while (cleaned.startsWith(".") || cleaned.endsWith(".") || cleaned.endsWith(" ")) {
             cleaned = cleaned.replaceAll("^\\.+|[. ]+$", "").trim();
         }
-        if (cleaned.equals("..") || cleaned.equals(".")) {
+        cleaned = cleaned.replaceAll("\\.{2,}", "_");
+        while (cleaned.startsWith(".") || cleaned.endsWith(".") || cleaned.endsWith(" ")) {
+            cleaned = cleaned.replaceAll("^\\.+|[. ]+$", "").trim();
+        }
+        if (cleaned.isEmpty() || cleaned.equals("..") || cleaned.equals(".")) {
             return "";
+        }
+        if (WINDOWS_RESERVED_NAME.matcher(cleaned).matches()) {
+            cleaned = "world_" + cleaned;
         }
         return cleaned;
     }

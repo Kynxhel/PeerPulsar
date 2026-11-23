@@ -22,12 +22,14 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class UPnPService {
     private static UPnPService instance;
     private final Object portLock = new Object();
+    private final AtomicLong mapAttemptGen = new AtomicLong(0);
 
     private volatile String controlUrl = null;
     private volatile String serviceType = null;
@@ -59,6 +61,9 @@ public class UPnPService {
     );
     private static final Pattern CONTROL_URL_PATTERN = Pattern.compile(
             "(?is)<(?:[a-zA-Z0-9_-]+:)?controlURL[^>]*>\\s*([^<]+?)\\s*</(?:[a-zA-Z0-9_-]+:)?controlURL>"
+    );
+    private static final Pattern EXTERNAL_IP_PATTERN = Pattern.compile(
+            "(?is)<(?:[a-zA-Z0-9_-]+:)?NewExternalIPAddress[^>]*>\\s*([^<]+?)\\s*</(?:[a-zA-Z0-9_-]+:)?NewExternalIPAddress>"
     );
 
     private UPnPService() {}
@@ -100,7 +105,9 @@ public class UPnPService {
     public GatewayProbeResult probeGateway(boolean testPortMapping) {
         synchronized (portLock) {
             this.localIp = resolveLocalIpAddress();
-            boolean found = (controlUrl != null && serviceType != null) || discoverRouter();
+            this.controlUrl = null;
+            this.serviceType = null;
+            boolean found = discoverRouter();
             if (!found) {
                 this.routerWanIp = null;
                 return new GatewayProbeResult(false, null, false);
@@ -137,6 +144,7 @@ public class UPnPService {
         try {
             return openPortAsync(port, description).get(7, TimeUnit.SECONDS);
         } catch (Exception e) {
+            this.mapAttemptGen.incrementAndGet();
             this.status = UPnPStatus.FAILED;
             return false;
         }
@@ -162,10 +170,14 @@ public class UPnPService {
      * Discovers UPnP router (IGD v1/v2) and forwards the specified TCP port.
      */
     public CompletableFuture<Boolean> openPortAsync(int port, String description) {
+        final long attemptGen = this.mapAttemptGen.incrementAndGet();
         this.status = UPnPStatus.SEARCHING;
 
         return CompletableFuture.supplyAsync(() -> {
             synchronized (portLock) {
+                if (this.mapAttemptGen.get() != attemptGen) {
+                    return false;
+                }
                 try {
                     // Clean up any previously mapped port first
                     if (isMapped && mappedPort > 0 && mappedPort != port && controlUrl != null) {
@@ -176,16 +188,21 @@ public class UPnPService {
                     }
 
                     this.localIp = resolveLocalIpAddress();
-                    this.mappedPort = port;
 
                     if (controlUrl == null || serviceType == null) {
                         boolean found = discoverRouter();
                         if (!found) {
                             FabricP2PMod.LOGGER.warn("[UPnP] Router discovery failed or UPnP is disabled.");
                             resolveExternalIpFallback();
-                            this.status = UPnPStatus.FAILED;
+                            if (this.mapAttemptGen.get() == attemptGen) {
+                                this.status = UPnPStatus.FAILED;
+                            }
                             return false;
                         }
+                    }
+
+                    if (this.mapAttemptGen.get() != attemptGen) {
+                        return false;
                     }
 
                     queryExternalIp();
@@ -193,20 +210,36 @@ public class UPnPService {
                         resolveExternalIpFallback();
                     }
 
+                    if (this.mapAttemptGen.get() != attemptGen) {
+                        return false;
+                    }
+
                     boolean success = addPortMapping(port, localIp, "TCP", description);
                     if (success) {
+                        if (this.mapAttemptGen.get() != attemptGen) {
+                            FabricP2PMod.LOGGER.info("[UPnP] Port {} mapping finished after timeout/cancel — deleting stray mapping.", port);
+                            try {
+                                deletePortMapping(port, "TCP");
+                            } catch (Exception ignored) {}
+                            return false;
+                        }
+                        this.mappedPort = port;
                         this.isMapped = true;
                         this.status = UPnPStatus.SUCCESS;
                         FabricP2PMod.LOGGER.info("[UPnP] Port {} mapped to {}. External IP: {}", port, localIp, externalIp);
                         return true;
                     } else {
-                        this.status = UPnPStatus.FAILED;
+                        if (this.mapAttemptGen.get() == attemptGen) {
+                            this.status = UPnPStatus.FAILED;
+                        }
                         return false;
                     }
                 } catch (Exception e) {
                     FabricP2PMod.LOGGER.error("[UPnP] Exception during port mapping: {}", e.getMessage());
                     resolveExternalIpFallback();
-                    this.status = UPnPStatus.FAILED;
+                    if (this.mapAttemptGen.get() == attemptGen) {
+                        this.status = UPnPStatus.FAILED;
+                    }
                     return false;
                 }
             }
@@ -214,6 +247,7 @@ public class UPnPService {
     }
 
     public CompletableFuture<Void> closePortAsync() {
+        this.mapAttemptGen.incrementAndGet();
         return CompletableFuture.runAsync(() -> {
             synchronized (portLock) {
                 if (isMapped && mappedPort > 0 && controlUrl != null) {
@@ -275,8 +309,9 @@ public class UPnPService {
      * and optional XML namespace prefixes never cause cross-service mismatches.
      */
     private boolean parseDeviceDescription(String locationUrl) {
+        HttpURLConnection conn = null;
         try {
-            HttpURLConnection conn = (HttpURLConnection) URI.create(locationUrl).toURL().openConnection();
+            conn = (HttpURLConnection) URI.create(locationUrl).toURL().openConnection();
             conn.setConnectTimeout(2500);
             conn.setReadTimeout(2500);
             String xml = readStream(conn.getInputStream());
@@ -296,6 +331,8 @@ public class UPnPService {
             }
         } catch (Exception e) {
             FabricP2PMod.LOGGER.warn("[UPnP] Failed to parse device XML from {}: {}", locationUrl, e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
         }
         return false;
     }
@@ -309,6 +346,7 @@ public class UPnPService {
     }
 
     private boolean sendAddPortMapping(int port, String localIpAddr, String protocol, String description, int leaseDuration) {
+        String safeDesc = escapeXml(description);
         String soapBody = "<?xml version=\"1.0\"?>\r\n" +
                 "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n" +
                 "<s:Body>\r\n" +
@@ -319,7 +357,7 @@ public class UPnPService {
                 "<NewInternalPort>" + port + "</NewInternalPort>\r\n" +
                 "<NewInternalClient>" + localIpAddr + "</NewInternalClient>\r\n" +
                 "<NewEnabled>1</NewEnabled>\r\n" +
-                "<NewPortMappingDescription>" + description + "</NewPortMappingDescription>\r\n" +
+                "<NewPortMappingDescription>" + safeDesc + "</NewPortMappingDescription>\r\n" +
                 "<NewLeaseDuration>" + leaseDuration + "</NewLeaseDuration>\r\n" +
                 "</u:AddPortMapping>\r\n" +
                 "</s:Body>\r\n" +
@@ -353,8 +391,9 @@ public class UPnPService {
                 "</s:Body>\r\n" +
                 "</s:Envelope>";
 
+        HttpURLConnection conn = null;
         try {
-            HttpURLConnection conn = (HttpURLConnection) URI.create(controlUrl).toURL().openConnection();
+            conn = (HttpURLConnection) URI.create(controlUrl).toURL().openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"");
@@ -368,8 +407,7 @@ public class UPnPService {
 
             if (conn.getResponseCode() == 200) {
                 String responseXml = readStream(conn.getInputStream());
-                Pattern pattern = Pattern.compile("<NewExternalIPAddress>(.*?)</NewExternalIPAddress>");
-                Matcher matcher = pattern.matcher(responseXml);
+                Matcher matcher = EXTERNAL_IP_PATTERN.matcher(responseXml);
                 if (matcher.find()) {
                     String ip = matcher.group(1).trim();
                     if (!ip.isEmpty() && !ip.equals("0.0.0.0")) {
@@ -378,14 +416,18 @@ public class UPnPService {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
     }
 
     private void resolveExternalIpFallback() {
         for (String endpoint : IP_FALLBACK_ENDPOINTS) {
+            HttpURLConnection conn = null;
             try {
                 URL url = URI.create(endpoint).toURL();
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn = (HttpURLConnection) url.openConnection();
                 conn.setConnectTimeout(2500);
                 conn.setReadTimeout(2500);
                 String ip = readStream(conn.getInputStream()).trim();
@@ -393,17 +435,26 @@ public class UPnPService {
                     this.externalIp = ip;
                     return;
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
         }
     }
 
     private boolean sendSoapRequest(String action, String soapBody) {
+        String currentControlUrl = this.controlUrl;
+        String currentServiceType = this.serviceType;
+        if (currentControlUrl == null || currentServiceType == null) {
+            return false;
+        }
+        HttpURLConnection conn = null;
         try {
-            HttpURLConnection conn = (HttpURLConnection) URI.create(controlUrl).toURL().openConnection();
+            conn = (HttpURLConnection) URI.create(currentControlUrl).toURL().openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"");
-            conn.setRequestProperty("SOAPAction", "\"" + serviceType + "#" + action + "\"");
+            conn.setRequestProperty("SOAPAction", "\"" + currentServiceType + "#" + action + "\"");
             conn.setConnectTimeout(3500);
             conn.setReadTimeout(3500);
 
@@ -412,10 +463,27 @@ public class UPnPService {
             }
 
             return conn.getResponseCode() == 200;
+        } catch (IOException e) {
+            FabricP2PMod.LOGGER.warn("[UPnP] SOAP {} connection/IO error (clearing cached gateway): {}", action, e.getMessage());
+            this.controlUrl = null;
+            this.serviceType = null;
+            return false;
         } catch (Exception e) {
             FabricP2PMod.LOGGER.warn("[UPnP] SOAP {} request failed: {}", action, e.getMessage());
             return false;
+        } finally {
+            if (conn != null) conn.disconnect();
         }
+    }
+
+    private static String escapeXml(String input) {
+        if (input == null) return "";
+        return input
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&apos;");
     }
 
     /**

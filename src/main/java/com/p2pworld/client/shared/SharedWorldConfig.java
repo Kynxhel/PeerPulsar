@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -181,6 +182,15 @@ public class SharedWorldConfig {
         save();
     }
 
+    public synchronized void clearGoogleIdToken() {
+        if (this.googleIdToken != null && !this.googleIdToken.isEmpty()) {
+            this.googleIdToken = "";
+            save();
+        } else {
+            this.googleIdToken = "";
+        }
+    }
+
     public synchronized void clearGoogleAuth() {
         this.googleAccessToken = "";
         this.googleRefreshToken = "";
@@ -229,10 +239,16 @@ public class SharedWorldConfig {
             Path tmp = CONFIG_PATH.resolveSibling(CONFIG_PATH.getFileName().toString() + ".tmp");
             Files.writeString(tmp, GSON.toJson(this), StandardCharsets.UTF_8);
             try {
+                Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------"));
+            } catch (UnsupportedOperationException | IOException ignored) {}
+            try {
                 Files.move(tmp, CONFIG_PATH, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (IOException atomicUnsupported) {
                 Files.move(tmp, CONFIG_PATH, StandardCopyOption.REPLACE_EXISTING);
             }
+            try {
+                Files.setPosixFilePermissions(CONFIG_PATH, PosixFilePermissions.fromString("rw-------"));
+            } catch (UnsupportedOperationException | IOException ignored) {}
         } catch (IOException e) {
             FabricP2PMod.LOGGER.warn("[SharedWorlds] Failed to save config: {}", e.getMessage());
         }

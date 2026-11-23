@@ -1,5 +1,6 @@
 package com.p2pworld.client.shared;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.p2pworld.FabricP2PMod;
@@ -26,6 +27,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Pure-Java Google OAuth 2.0 Desktop Loopback + PKCE (RFC 8252) Sign-In Client.
@@ -63,7 +65,7 @@ public class GoogleAuthService {
     }
 
     private static GoogleAuthService instance;
-    private volatile boolean signingIn = false;
+    private final AtomicBoolean signingIn = new AtomicBoolean(false);
     private final Object tokenRefreshLock = new Object();
 
     private String resolveClientId() {
@@ -86,7 +88,7 @@ public class GoogleAuthService {
     }
 
     public boolean isSigningIn() {
-        return signingIn;
+        return signingIn.get();
     }
 
     public boolean isSignedIn() {
@@ -112,124 +114,175 @@ public class GoogleAuthService {
             ));
         }
 
-        if (signingIn) {
+        if (!signingIn.compareAndSet(false, true)) {
             return CompletableFuture.completedFuture(new AuthResult(false, null, "Sign-in already in progress..."));
         }
 
-        this.signingIn = true;
+        try {
+            return CompletableFuture.supplyAsync(() -> {
+                HttpServer server = null;
+                try {
+                    // 1. Start local loopback HTTP server on an ephemeral port
+                    server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+                    int port = server.getAddress().getPort();
+                    String redirectUri = "http://127.0.0.1:" + port + "/callback";
+                    String expectedState = generateRandomToken(24);
 
-        return CompletableFuture.supplyAsync(() -> {
-            HttpServer server = null;
-            try {
-                // 1. Start local loopback HTTP server on an ephemeral port
-                server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-                int port = server.getAddress().getPort();
-                String redirectUri = "http://127.0.0.1:" + port + "/callback";
-                String expectedState = generateRandomToken(24);
+                    CompletableFuture<String> codeFuture = new CompletableFuture<>();
+                    server.createContext("/callback", exchange -> {
+                        String query = exchange.getRequestURI().getRawQuery();
+                        Map<String, String> params = parseQuery(query);
+                        String code = params.get("code");
+                        String state = params.get("state");
+                        String err = params.get("error");
 
-                CompletableFuture<String> codeFuture = new CompletableFuture<>();
-                server.createContext("/callback", exchange -> {
-                    String query = exchange.getRequestURI().getRawQuery();
-                    Map<String, String> params = parseQuery(query);
-                    String code = params.get("code");
-                    String state = params.get("state");
-                    String err = params.get("error");
+                        String html;
+                        if (code != null && !code.isBlank() && expectedState.equals(state)) {
+                            html = "<html><body style='background:#060913;color:#f8fafc;font-family:sans-serif;text-align:center;padding-top:80px'>"
+                                    + "<h1 style='color:#10b981'>&#10004; Google Sign-In Successful!</h1>"
+                                    + "<p style='color:#94a3b8'>You can close this tab and return to Minecraft (Fabric P2P World).</p>"
+                                    + "</body></html>";
+                            codeFuture.complete(code);
+                        } else {
+                            String reason = !expectedState.equals(state) && (err == null || err.isBlank())
+                                    ? "Invalid OAuth state parameter (CSRF check failed)"
+                                    : (err != null ? err : "Unknown error");
+                            html = "<html><body style='background:#060913;color:#ef4444;font-family:sans-serif;text-align:center;padding-top:80px'>"
+                                    + "<h1>Sign-In Cancelled / Failed</h1><p>" + escapeHtml(reason) + "</p>"
+                                    + "</body></html>";
+                            codeFuture.completeExceptionally(new IOException("OAuth error: " + reason));
+                        }
 
-                    String html;
-                    if (code != null && !code.isBlank() && expectedState.equals(state)) {
-                        html = "<html><body style='background:#060913;color:#f8fafc;font-family:sans-serif;text-align:center;padding-top:80px'>"
-                                + "<h1 style='color:#10b981'>&#10004; Google Sign-In Successful!</h1>"
-                                + "<p style='color:#94a3b8'>You can close this tab and return to Minecraft (Fabric P2P World).</p>"
-                                + "</body></html>";
-                        codeFuture.complete(code);
-                    } else {
-                        String reason = !expectedState.equals(state) && (err == null || err.isBlank())
-                                ? "Invalid OAuth state parameter (CSRF check failed)"
-                                : (err != null ? err : "Unknown error");
-                        html = "<html><body style='background:#060913;color:#ef4444;font-family:sans-serif;text-align:center;padding-top:80px'>"
-                                + "<h1>Sign-In Cancelled / Failed</h1><p>" + escapeHtml(reason) + "</p>"
-                                + "</body></html>";
-                        codeFuture.completeExceptionally(new IOException("OAuth error: " + reason));
+                        byte[] body = html.getBytes(StandardCharsets.UTF_8);
+                        exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+                        exchange.sendResponseHeaders(200, body.length);
+                        try (OutputStream os = exchange.getResponseBody()) {
+                            os.write(body);
+                        }
+                    });
+                    server.start();
+
+                    // 2. PKCE verifier & challenge
+                    String codeVerifier = generateRandomToken(32);
+                    String codeChallenge = generateCodeChallenge(codeVerifier);
+
+                    String authUrl = AUTH_URL
+                            + "?client_id=" + enc(clientId)
+                            + "&redirect_uri=" + enc(redirectUri)
+                            + "&response_type=code"
+                            + "&scope=" + enc(SCOPES)
+                            + "&state=" + enc(expectedState)
+                            + "&code_challenge=" + enc(codeChallenge)
+                            + "&code_challenge_method=S256"
+                            + "&access_type=offline"
+                            + "&prompt=" + enc("select_account consent");
+
+                    openBrowser(authUrl);
+
+                    // 3. Wait up to 2 minutes for user to finish login in browser
+                    String authCode = codeFuture.get(120, TimeUnit.SECONDS);
+
+                    // 4. Exchange auth code for tokens
+                    StringBuilder form = new StringBuilder();
+                    form.append("client_id=").append(enc(clientId));
+                    if (!clientSecret.isBlank()) {
+                        form.append("&client_secret=").append(enc(clientSecret));
+                    }
+                    form.append("&code=").append(enc(authCode));
+                    form.append("&code_verifier=").append(enc(codeVerifier));
+                    form.append("&grant_type=authorization_code");
+                    form.append("&redirect_uri=").append(enc(redirectUri));
+
+                    JsonObject tokenResp = postFormJson(TOKEN_URL, form.toString());
+                    if (!tokenResp.has("access_token") || tokenResp.get("access_token").isJsonNull()) {
+                        String errDesc = (tokenResp.has("error_description") && !tokenResp.get("error_description").isJsonNull())
+                                ? tokenResp.get("error_description").getAsString()
+                                : tokenResp.toString();
+                        return new AuthResult(false, null, "Token exchange failed: " + errDesc);
                     }
 
-                    byte[] body = html.getBytes(StandardCharsets.UTF_8);
-                    exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
-                    exchange.sendResponseHeaders(200, body.length);
-                    try (OutputStream os = exchange.getResponseBody()) {
-                        os.write(body);
+                    String accessToken = tokenResp.get("access_token").getAsString();
+                    String refreshToken = (tokenResp.has("refresh_token") && !tokenResp.get("refresh_token").isJsonNull())
+                            ? tokenResp.get("refresh_token").getAsString().trim()
+                            : "";
+                    String idToken = (tokenResp.has("id_token") && !tokenResp.get("id_token").isJsonNull())
+                            ? tokenResp.get("id_token").getAsString().trim()
+                            : "";
+                    long expiresInSec = (tokenResp.has("expires_in") && !tokenResp.get("expires_in").isJsonNull())
+                            ? tokenResp.get("expires_in").getAsLong()
+                            : 3600;
+                    long expiryMs = System.currentTimeMillis() + Math.max(60, expiresInSec - 60) * 1000L;
+
+                    // 5. Fetch verified user email (must contain '@')
+                    String email = fetchUserEmail(accessToken);
+                    if (email == null || !email.contains("@")) {
+                        return new AuthResult(false, null, "Could not retrieve verified email address from Google.");
                     }
-                });
-                server.start();
 
-                // 2. PKCE verifier & challenge
-                String codeVerifier = generateRandomToken(32);
-                String codeChallenge = generateCodeChallenge(codeVerifier);
+                    // Ensure we have a refresh token (newly issued or already stored for this exact account)
+                    boolean sameAccount = !cfg.getGoogleUserEmail().isBlank()
+                            && cfg.getGoogleUserEmail().equalsIgnoreCase(email);
+                    String existingRefreshForSameEmail = sameAccount ? cfg.getGoogleRefreshToken() : "";
+                    if (refreshToken.isBlank() && existingRefreshForSameEmail.isBlank()) {
+                        return new AuthResult(
+                                false,
+                                null,
+                                "Google did not return a refresh token. Please revoke previous access at myaccount.google.com/permissions and sign in again."
+                        );
+                    }
 
-                String authUrl = AUTH_URL
-                        + "?client_id=" + enc(clientId)
-                        + "&redirect_uri=" + enc(redirectUri)
-                        + "&response_type=code"
-                        + "&scope=" + enc(SCOPES)
-                        + "&state=" + enc(expectedState)
-                        + "&code_challenge=" + enc(codeChallenge)
-                        + "&code_challenge_method=S256"
-                        + "&access_type=offline"
-                        + "&prompt=" + enc("select_account consent");
+                    // Clear any previous account's folder bindings if switching accounts
+                    if (!cfg.getGoogleUserEmail().isBlank() && !sameAccount) {
+                        cfg.clearGoogleAuth();
+                    }
+                    cfg.setGoogleTokens(accessToken, refreshToken, idToken, expiryMs, email);
 
-                openBrowser(authUrl);
-
-                // 3. Wait up to 2 minutes for user to finish login in browser
-                String authCode = codeFuture.get(120, TimeUnit.SECONDS);
-
-                // 4. Exchange auth code for tokens
-                StringBuilder form = new StringBuilder();
-                form.append("client_id=").append(enc(clientId));
-                if (!clientSecret.isBlank()) {
-                    form.append("&client_secret=").append(enc(clientSecret));
+                    FabricP2PMod.LOGGER.info("[GoogleAuth] Signed in successfully as {}", email);
+                    return new AuthResult(true, email, null);
+                } catch (Exception e) {
+                    FabricP2PMod.LOGGER.error("[GoogleAuth] Sign-in failed: {}", e.getMessage());
+                    return new AuthResult(false, null, e.getMessage());
+                } finally {
+                    this.signingIn.set(false);
+                    if (server != null) {
+                        server.stop(1);
+                    }
                 }
-                form.append("&code=").append(enc(authCode));
-                form.append("&code_verifier=").append(enc(codeVerifier));
-                form.append("&grant_type=authorization_code");
-                form.append("&redirect_uri=").append(enc(redirectUri));
+            });
+        } catch (RuntimeException e) {
+            this.signingIn.set(false);
+            throw e;
+        }
+    }
 
-                JsonObject tokenResp = postFormJson(TOKEN_URL, form.toString());
-                if (!tokenResp.has("access_token")) {
-                    String errDesc = tokenResp.has("error_description")
-                            ? tokenResp.get("error_description").getAsString()
-                            : tokenResp.toString();
-                    return new AuthResult(false, null, "Token exchange failed: " + errDesc);
-                }
-
-                String accessToken = tokenResp.get("access_token").getAsString();
-                String refreshToken = tokenResp.has("refresh_token") ? tokenResp.get("refresh_token").getAsString() : "";
-                String idToken = tokenResp.has("id_token") ? tokenResp.get("id_token").getAsString() : "";
-                long expiresInSec = tokenResp.has("expires_in") ? tokenResp.get("expires_in").getAsLong() : 3600;
-                long expiryMs = System.currentTimeMillis() + Math.max(60, expiresInSec - 60) * 1000L;
-
-                // 5. Fetch verified user email (must contain '@')
-                String email = fetchUserEmail(accessToken);
-                if (email == null || !email.contains("@")) {
-                    return new AuthResult(false, null, "Could not retrieve verified email address from Google.");
-                }
-
-                // Clear any previous account's folder bindings if switching accounts
-                if (!cfg.getGoogleUserEmail().isBlank() && !cfg.getGoogleUserEmail().equalsIgnoreCase(email)) {
-                    cfg.clearGoogleAuth();
-                }
-                cfg.setGoogleTokens(accessToken, refreshToken, idToken, expiryMs, email);
-
-                FabricP2PMod.LOGGER.info("[GoogleAuth] Signed in successfully as {}", email);
-                return new AuthResult(true, email, null);
-            } catch (Exception e) {
-                FabricP2PMod.LOGGER.error("[GoogleAuth] Sign-in failed: {}", e.getMessage());
-                return new AuthResult(false, null, e.getMessage());
-            } finally {
-                this.signingIn = false;
-                if (server != null) {
-                    server.stop(1);
-                }
+    /**
+     * Checks whether a JWT has a valid Base64URL payload with a numeric {@code exp} claim (seconds)
+     * strictly greater than {@code System.currentTimeMillis() + skewMs}.
+     */
+    public static boolean isJwtUnexpired(String jwt, long skewMs) {
+        if (jwt == null || jwt.isBlank()) {
+            return false;
+        }
+        try {
+            String[] parts = jwt.trim().split("\\.", -1);
+            if (parts.length != 3 || parts[0].isBlank() || parts[1].isBlank() || parts[2].isBlank()) {
+                return false;
             }
-        });
+            byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
+            String payloadJson = new String(decoded, StandardCharsets.UTF_8);
+            JsonElement elem = JsonParser.parseString(payloadJson);
+            if (!elem.isJsonObject()) {
+                return false;
+            }
+            JsonObject payload = elem.getAsJsonObject();
+            if (!payload.has("exp") || payload.get("exp").isJsonNull()) {
+                return false;
+            }
+            long expSec = payload.get("exp").getAsLong();
+            return expSec * 1000L > System.currentTimeMillis() + skewMs;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**
@@ -251,7 +304,8 @@ public class GoogleAuthService {
 
     /**
      * Returns a valid Google-signed OIDC id_token for cryptographic anti-spoof verification,
-     * refreshing tokens if missing or expired. Returns empty string if not signed in.
+     * refreshing tokens if missing or expired. Returns empty string if not signed in or if a
+     * fresh unexpired id_token cannot be obtained.
      */
     public String getValidIdToken() {
         synchronized (tokenRefreshLock) {
@@ -259,13 +313,23 @@ public class GoogleAuthService {
             if (!cfg.isGoogleSignedIn()) {
                 return "";
             }
-            if (!cfg.getGoogleIdToken().isBlank() && System.currentTimeMillis() < cfg.getGoogleTokenExpiryMs()) {
-                return cfg.getGoogleIdToken();
+            String cached = cfg.getGoogleIdToken();
+            if (isJwtUnexpired(cached, 60_000L)) {
+                return cached;
             }
             try {
                 refreshTokensLocked(cfg);
-                return cfg.getGoogleIdToken();
+                String refreshed = cfg.getGoogleIdToken();
+                if (isJwtUnexpired(refreshed, 30_000L)) {
+                    return refreshed;
+                }
+                cfg.clearGoogleIdToken();
+                FabricP2PMod.LOGGER.warn("[GoogleAuth] Token refresh did not return a fresh unexpired id_token; cleared stale id_token.");
+                return "";
             } catch (Exception e) {
+                if (!cached.isBlank() && !isJwtUnexpired(cached, 0L)) {
+                    cfg.clearGoogleIdToken();
+                }
                 FabricP2PMod.LOGGER.warn("[GoogleAuth] Failed to refresh id_token: {}", e.getMessage());
                 return "";
             }
@@ -287,14 +351,27 @@ public class GoogleAuthService {
         form.append("&grant_type=refresh_token");
 
         JsonObject resp = postFormJson(TOKEN_URL, form.toString());
-        if (!resp.has("access_token")) {
+        if (!resp.has("access_token") || resp.get("access_token").isJsonNull()) {
             throw new IOException("Token refresh failed: " + resp);
         }
         String newAccess = resp.get("access_token").getAsString();
-        String newIdToken = resp.has("id_token") ? resp.get("id_token").getAsString() : "";
-        long expiresIn = resp.has("expires_in") ? resp.get("expires_in").getAsLong() : 3600;
-        cfg.setGoogleTokens(newAccess, null, newIdToken,
+        String newRefresh = (resp.has("refresh_token") && !resp.get("refresh_token").isJsonNull())
+                ? resp.get("refresh_token").getAsString().trim()
+                : null;
+        String newIdToken = (resp.has("id_token") && !resp.get("id_token").isJsonNull())
+                ? resp.get("id_token").getAsString().trim()
+                : "";
+        long expiresIn = (resp.has("expires_in") && !resp.get("expires_in").isJsonNull())
+                ? resp.get("expires_in").getAsLong()
+                : 3600;
+        boolean hasFreshIdToken = !newIdToken.isBlank() && isJwtUnexpired(newIdToken, 0L);
+
+        cfg.setGoogleTokens(newAccess, newRefresh, hasFreshIdToken ? newIdToken : "",
                 System.currentTimeMillis() + Math.max(60, expiresIn - 60) * 1000L, null);
+
+        if (!hasFreshIdToken && !cfg.getGoogleIdToken().isBlank() && !isJwtUnexpired(cfg.getGoogleIdToken(), 0L)) {
+            cfg.clearGoogleIdToken();
+        }
     }
 
     /**
@@ -316,24 +393,40 @@ public class GoogleAuthService {
                 return null;
             }
             JsonObject obj = JsonParser.parseString(resp.body()).getAsJsonObject();
-            String iss = obj.has("iss") ? obj.get("iss").getAsString() : "";
+            String iss = (obj.has("iss") && !obj.get("iss").isJsonNull()) ? obj.get("iss").getAsString() : "";
             if (!iss.equals("https://accounts.google.com") && !iss.equals("accounts.google.com")) {
                 return null;
             }
-            String emailVerified = obj.has("email_verified") ? obj.get("email_verified").getAsString() : "false";
+            String expectedClientId = GoogleAuthService.getInstance().resolveClientId();
+            if (expectedClientId != null && !expectedClientId.isBlank()) {
+                String aud = (obj.has("aud") && !obj.get("aud").isJsonNull()) ? obj.get("aud").getAsString().trim() : "";
+                String azp = (obj.has("azp") && !obj.get("azp").isJsonNull()) ? obj.get("azp").getAsString().trim() : "";
+                if (!expectedClientId.equals(aud) && !expectedClientId.equals(azp)) {
+                    FabricP2PMod.LOGGER.warn("[GoogleAuth] Rejected id_token: aud/azp mismatch (aud='{}', azp='{}').", aud, azp);
+                    return null;
+                }
+            }
+            String emailVerified = (obj.has("email_verified") && !obj.get("email_verified").isJsonNull())
+                    ? obj.get("email_verified").getAsString()
+                    : "false";
             if (!"true".equalsIgnoreCase(emailVerified)) {
                 return null;
             }
-            String email = obj.has("email") ? obj.get("email").getAsString().trim().toLowerCase(Locale.ROOT) : "";
-            String sub = obj.has("sub") ? obj.get("sub").getAsString().trim() : "";
+            String email = (obj.has("email") && !obj.get("email").isJsonNull())
+                    ? obj.get("email").getAsString().trim().toLowerCase(Locale.ROOT)
+                    : "";
+            String sub = (obj.has("sub") && !obj.get("sub").isJsonNull())
+                    ? obj.get("sub").getAsString().trim()
+                    : "";
             if (email.isBlank() || !email.contains("@") || sub.isBlank()) {
                 return null;
             }
-            if (obj.has("exp")) {
-                long expSec = obj.get("exp").getAsLong();
-                if (expSec * 1000L <= System.currentTimeMillis()) {
-                    return null;
-                }
+            if (!obj.has("exp") || obj.get("exp").isJsonNull()) {
+                return null;
+            }
+            long expSec = obj.get("exp").getAsLong();
+            if (expSec * 1000L <= System.currentTimeMillis()) {
+                return null;
             }
             return new VerifiedGoogleIdentity(sub, email);
         } catch (Exception e) {

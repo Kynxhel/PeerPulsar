@@ -15,7 +15,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 /**
@@ -37,7 +36,7 @@ public class TunnelRelayService {
     private volatile Thread controlThread = null;
     private volatile Consumer<String> unexpectedDisconnectHandler = null;
     private final Set<Socket> activeProxySockets = ConcurrentHashMap.newKeySet();
-    private final AtomicInteger activeStreams = new AtomicInteger(0);
+    private final Set<Object> activeStreamTokens = ConcurrentHashMap.newKeySet();
 
     private TunnelRelayService() {}
 
@@ -65,7 +64,7 @@ public class TunnelRelayService {
     }
 
     public int getActiveStreamCount() {
-        return activeStreams.get();
+        return activeStreamTokens.size();
     }
 
     /**
@@ -95,6 +94,7 @@ public class TunnelRelayService {
                 ctrl.connect(new InetSocketAddress(RELAY_HOST, RELAY_CONTROL_PORT), 5000);
                 ctrl.setSoTimeout(10000);
                 ctrl.setTcpNoDelay(true);
+                ctrl.setKeepAlive(true);
 
                 // Send Hello requesting a random public port
                 sendJsonFrame(ctrl.getOutputStream(), "{\"Hello\":0}");
@@ -112,7 +112,7 @@ public class TunnelRelayService {
                 }
 
                 int assignedPort = elem.getAsJsonObject().get("Hello").getAsInt();
-                ctrl.setSoTimeout(0); // Infinite read timeout for control loop
+                ctrl.setSoTimeout(60_000); // Detect silent Wi-Fi/NAT disconnects via missed relay heartbeats
 
                 this.controlSocket = ctrl;
                 this.remoteHost = RELAY_HOST;
@@ -154,7 +154,7 @@ public class TunnelRelayService {
                         JsonObject obj = elem.getAsJsonObject();
                         if (obj.has("Connection")) {
                             String uuid = obj.get("Connection").getAsString();
-                            spawnConnectionProxy(uuid, localPort);
+                            spawnConnectionProxy(ctrl, uuid, localPort);
                         } else if (obj.has("Error")) {
                             FabricP2PMod.LOGGER.warn("[P2P-Tunnel] Relay error: {}", obj.get("Error").getAsString());
                         }
@@ -184,12 +184,16 @@ public class TunnelRelayService {
         }
     }
 
-    private void spawnConnectionProxy(String uuid, int localPort) {
+    private void spawnConnectionProxy(Socket expectedCtrl, String uuid, int localPort) {
         Thread proxyThread = new Thread(() -> {
             Socket remoteSock = null;
             Socket localSock = null;
-            boolean streamCounted = false;
+            final Object streamToken = new Object();
             try {
+                if (!active || this.controlSocket != expectedCtrl) {
+                    return;
+                }
+
                 remoteSock = new Socket();
                 remoteSock.connect(new InetSocketAddress(RELAY_HOST, RELAY_CONTROL_PORT), 5000);
                 remoteSock.setTcpNoDelay(true);
@@ -201,10 +205,19 @@ public class TunnelRelayService {
                 localSock.connect(new InetSocketAddress("127.0.0.1", localPort), 3000);
                 localSock.setTcpNoDelay(true);
 
+                if (!active || this.controlSocket != expectedCtrl) {
+                    return;
+                }
+
                 activeProxySockets.add(remoteSock);
                 activeProxySockets.add(localSock);
-                activeStreams.incrementAndGet();
-                streamCounted = true;
+
+                // Double-check after registration in case stopTunnel() cleared activeProxySockets concurrently
+                if (!active || this.controlSocket != expectedCtrl) {
+                    return;
+                }
+
+                activeStreamTokens.add(streamToken);
 
                 final Socket rSock = remoteSock;
                 final Socket lSock = localSock;
@@ -218,9 +231,7 @@ public class TunnelRelayService {
             } catch (Exception e) {
                 FabricP2PMod.LOGGER.debug("[P2P-Tunnel] Proxy stream ended ({}): {}", uuid, e.getMessage());
             } finally {
-                if (streamCounted) {
-                    activeStreams.decrementAndGet();
-                }
+                activeStreamTokens.remove(streamToken);
                 closeQuietly(remoteSock);
                 closeQuietly(localSock);
                 if (remoteSock != null) activeProxySockets.remove(remoteSock);
@@ -266,7 +277,6 @@ public class TunnelRelayService {
             closeQuietly(s);
         }
         activeProxySockets.clear();
-        activeStreams.set(0);
     }
 
     private static void sendJsonFrame(OutputStream out, String json) throws IOException {

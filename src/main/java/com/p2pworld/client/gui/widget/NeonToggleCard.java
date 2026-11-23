@@ -97,9 +97,23 @@ public class NeonToggleCard extends AbstractButton {
         Font font = Minecraft.getInstance().font;
         int titleColor = this.active ? NeonTheme.TEXT_SECONDARY : NeonTheme.TEXT_MUTED;
         int valueColor = this.active ? NeonTheme.withAlpha(accent, 255) : NeonTheme.TEXT_MUTED;
+        int maxTextW = Math.max(24, w - (this.enabledStateSupplier != null ? 44 : 28));
 
-        graphics.text(font, this.title, x + 8, y + 5, titleColor, false);
-        graphics.text(font, this.valueSupplier.get(), x + 8, y + 17, valueColor, true);
+        String drawnTitle = this.title != null ? this.title : "";
+        if (font.width(drawnTitle) > maxTextW) {
+            drawnTitle = font.plainSubstrByWidth(drawnTitle, maxTextW);
+        }
+        String rawVal = this.valueSupplier.get();
+        String drawnVal = rawVal != null ? rawVal : "";
+        if (font.width(drawnVal) > maxTextW) {
+            int ellW = font.width("...");
+            drawnVal = maxTextW > ellW
+                    ? font.plainSubstrByWidth(drawnVal, maxTextW - ellW) + "..."
+                    : font.plainSubstrByWidth(drawnVal, maxTextW);
+        }
+
+        graphics.text(font, drawnTitle, x + 8, y + 5, titleColor, false);
+        graphics.text(font, drawnVal, x + 8, y + 17, valueColor, true);
 
         // Animated sliding switch pill on the right side (for boolean toggles)
         if (this.enabledStateSupplier != null) {

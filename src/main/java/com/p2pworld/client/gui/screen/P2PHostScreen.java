@@ -65,9 +65,16 @@ public class P2PHostScreen extends Screen {
 
     private void computeLayout() {
         this.compact = this.height < 276;
-        this.sideGap = 8;
-        this.sideW = (this.width >= 520) ? 168 : 156;
-        this.panelW = Math.min(316, Math.max(244, this.width - this.sideW - this.sideGap - 16));
+        this.sideGap = (this.width < 420) ? 6 : 8;
+        if (this.width < 420) {
+            int maxTotalW = Math.max(180, this.width - 12);
+            int avail = maxTotalW - this.sideGap;
+            this.sideW = Math.max(84, Math.min(148, (avail * 38) / 100));
+            this.panelW = Math.max(90, avail - this.sideW);
+        } else {
+            this.sideW = (this.width >= 520) ? 168 : 156;
+            this.panelW = Math.min(316, Math.max(244, this.width - this.sideW - this.sideGap - 16));
+        }
         int totalW = this.panelW + this.sideGap + this.sideW;
         this.panelLeft = Math.max(6, (this.width - totalW) / 2);
         this.sideLeft = this.panelLeft + this.panelW + this.sideGap;
@@ -318,8 +325,9 @@ public class P2PHostScreen extends Screen {
         this.addRenderableWidget(copyDiscordButton);
 
         int footerY = Math.min(this.height - 22, actionY + actionH + (compact ? 4 : 6));
+        int footerBtnW = Math.min(138, Math.max(70, (this.width - 20) / 2));
         this.backButton = new NeonButton(
-                this.width / 2 - 144, footerY, 138, 20,
+                this.width / 2 - footerBtnW - 6, footerY, footerBtnW, 20,
                 Component.literal("← ").append(Component.translatable("gui.back")),
                 NeonTheme.SLATE,
                 () -> {
@@ -331,7 +339,7 @@ public class P2PHostScreen extends Screen {
         this.addRenderableWidget(backButton);
 
         NeonButton sharedWorldsBtn = new NeonButton(
-                this.width / 2 + 6, footerY, 138, 20,
+                this.width / 2 + 6, footerY, footerBtnW, 20,
                 Component.literal("☁ ").append(Component.translatable("menu.fabricp2p.shared_worlds")),
                 NeonTheme.VIOLET,
                 () -> {
@@ -363,9 +371,16 @@ public class P2PHostScreen extends Screen {
         NetworkDiagnosticsService diag = NetworkDiagnosticsService.getInstance();
         if (diag.isTesting()) return;
 
-        diag.runDiagnosticsAsync().thenAccept(report -> {
+        diag.runDiagnosticsAsync().whenComplete((report, err) -> {
             if (this.minecraft != null) {
                 this.minecraft.execute(() -> {
+                    if (err != null || report == null) {
+                        updateWidgetStates();
+                        if (showResultToast) {
+                            showToast(tr("screen.fabricp2p.host.toast_diag_blocked"), NeonTheme.CRIMSON);
+                        }
+                        return;
+                    }
                     networkManager.syncSelectedModeWithDiagnostics(report);
                     updateWidgetStates();
                     if (showResultToast) {
@@ -647,8 +662,9 @@ public class P2PHostScreen extends Screen {
         }
 
         int localPort = networkManager.getHostedPort();
+        String hostedHost = networkManager.getHostedPublicHost();
         String extAddr = active
-                ? (networkManager.getHostedPublicHost() + ":" + networkManager.getHostedPublicPort())
+                ? (hostedHost != null ? RoomCodeHelper.formatHostPort(hostedHost, networkManager.getHostedPublicPort()) : "---")
                 : (report.publicIp() != null ? report.publicIp() : "---");
         String localAddr = active ? (upnp.getLocalIp() + ":" + localPort) : upnp.getLocalIp();
         String playerCount = active
@@ -680,9 +696,20 @@ public class P2PHostScreen extends Screen {
         String code = networkManager.getHostedRoomCode();
         if (code != null) {
             String codeLabel = tr("screen.fabricp2p.host.label_room_code");
+            int codeStartX = panelLeft + 20 + this.font.width(codeLabel);
+            int maxCodeW = Math.max(30, codeBoxRight - codeStartX - 6);
+            String drawnCode = code;
+            if (this.font.width(Component.literal(drawnCode).withStyle(ChatFormatting.BOLD)) > maxCodeW) {
+                int ellipsisW = this.font.width(Component.literal("...").withStyle(ChatFormatting.BOLD));
+                String trimmed = this.font.plainSubstrByWidth(code, Math.max(12, maxCodeW - ellipsisW));
+                while (!trimmed.isEmpty() && this.font.width(Component.literal(trimmed + "...").withStyle(ChatFormatting.BOLD)) > maxCodeW) {
+                    trimmed = trimmed.substring(0, trimmed.length() - 1);
+                }
+                drawnCode = trimmed + "...";
+            }
             graphics.text(this.font, codeLabel, panelLeft + 16, codeBoxY + 5, NeonTheme.withAlpha(NeonTheme.AMBER, 255), false);
-            graphics.text(this.font, Component.literal(code).withStyle(ChatFormatting.BOLD),
-                    panelLeft + 20 + this.font.width(codeLabel), codeBoxY + 5, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
+            graphics.text(this.font, Component.literal(drawnCode).withStyle(ChatFormatting.BOLD),
+                    codeStartX, codeBoxY + 5, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
         } else {
             String placeholder = this.font.plainSubstrByWidth(
                     tr("screen.fabricp2p.host.room_code_placeholder"), Math.max(40, codeBoxRight - panelLeft - 24));

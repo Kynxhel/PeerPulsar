@@ -21,6 +21,9 @@ dependencies {
 
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 def resolvedModVersion = project.version.toString()
@@ -38,12 +41,36 @@ processResources {
     }
 
     doLast {
+        def outFile = new File(destinationDir, "assets/fabricp2p/oauth.properties")
+        def extracted = new java.util.Properties()
         if (localPropsSource.exists()) {
-            def outFile = new File(destinationDir, "assets/fabricp2p/oauth.properties")
+            def raw = new java.util.Properties()
+            localPropsSource.withInputStream { is ->
+                raw.load(new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))
+            }
+            def clientId = raw.getProperty("google.clientId", "").trim()
+            def clientSecret = raw.getProperty("google.clientSecret", "").trim()
+            if (!clientId.isEmpty()) {
+                extracted.setProperty("google.clientId", clientId)
+                if (!clientSecret.isEmpty()) {
+                    extracted.setProperty("google.clientSecret", clientSecret)
+                }
+            }
+        }
+
+        if (extracted.containsKey("google.clientId")) {
             outFile.parentFile.mkdirs()
-            outFile.text = localPropsSource.text
+            outFile.withOutputStream { os ->
+                extracted.store(os, "FabricP2P Google OAuth Credentials")
+            }
+        } else if (outFile.exists()) {
+            outFile.delete()
         }
     }
+}
+
+test {
+    useJUnitPlatform()
 }
 
 tasks.withType(JavaCompile).configureEach {

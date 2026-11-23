@@ -133,10 +133,11 @@ public class NetworkDiagnosticsService {
             UPnPService.GatewayProbeResult probe = UPnPService.getInstance().probeGateway(true);
             String routerWanIp = probe.routerWanIp();
 
-            // 3. Detect CGNAT (RFC 6598 100.64.0.0/10, RFC 1918 private WAN, or WAN != Public IP)
+            // 3. Detect CGNAT (RFC 6598 100.64.0.0/10, RFC 1918 private WAN, or IPv4 WAN != Public IPv4)
             boolean cgnat = false;
             if (routerWanIp != null && !routerWanIp.isEmpty()) {
-                if (isCgnatOrPrivateIp(routerWanIp) || !routerWanIp.equals(publicIp)) {
+                if (isCgnatOrPrivateIp(routerWanIp)
+                        || (isIpv4Literal(publicIp) && isIpv4Literal(routerWanIp) && !routerWanIp.equals(publicIp))) {
                     cgnat = true;
                 }
             }
@@ -191,6 +192,26 @@ public class NetworkDiagnosticsService {
     }
 
     /**
+     * Checks whether a string is a strict dotted-quad IPv4 literal (0.0.0.0 - 255.255.255.255).
+     */
+    public static boolean isIpv4Literal(String ip) {
+        if (ip == null || ip.isEmpty()) return false;
+        String[] parts = ip.split("\\.", -1);
+        if (parts.length != 4) return false;
+        for (String part : parts) {
+            if (part.isEmpty() || part.length() > 3) return false;
+            int val = 0;
+            for (int i = 0; i < part.length(); i++) {
+                char c = part.charAt(i);
+                if (c < '0' || c > '9') return false;
+                val = val * 10 + (c - '0');
+            }
+            if (val > 255) return false;
+        }
+        return true;
+    }
+
+    /**
      * Checks whether an IPv4 address belongs to CGNAT (100.64.0.0/10) or private RFC1918 ranges.
      */
     public static boolean isCgnatOrPrivateIp(String ip) {
@@ -211,8 +232,9 @@ public class NetworkDiagnosticsService {
 
     private static String queryHttpsPublicIp() {
         for (String endpoint : IP_ENDPOINTS) {
+            HttpURLConnection conn = null;
             try {
-                HttpURLConnection conn = (HttpURLConnection) URI.create(endpoint).toURL().openConnection();
+                conn = (HttpURLConnection) URI.create(endpoint).toURL().openConnection();
                 conn.setConnectTimeout(2500);
                 conn.setReadTimeout(2500);
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
@@ -221,7 +243,10 @@ public class NetworkDiagnosticsService {
                         return ip.trim();
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
         }
         return null;
     }

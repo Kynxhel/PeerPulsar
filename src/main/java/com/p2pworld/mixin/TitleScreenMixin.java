@@ -28,6 +28,17 @@ public abstract class TitleScreenMixin extends Screen {
         int x = this.width / 2 + 104;
         int y = this.height / 4 + 48 + 24;
 
+        if (x + btnWidth > this.width - 4) {
+            int available = this.width - x - 4;
+            if (available >= 88) {
+                btnWidth = Math.max(88, available);
+            } else {
+                btnWidth = 104;
+                x = Math.max(4, this.width - btnWidth - 6);
+                y = 6;
+            }
+        }
+
         NeonButton joinP2PBtn = new NeonButton(
                 x, y, btnWidth, btnHeight,
                 Component.literal("✦ ").append(Component.translatable("menu.fabricp2p.join_p2p")).withStyle(ChatFormatting.BOLD),

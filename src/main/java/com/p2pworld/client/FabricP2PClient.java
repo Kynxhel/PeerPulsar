@@ -24,7 +24,8 @@ public class FabricP2PClient implements ClientModInitializer {
             if (!ClientPlayNetworking.canSend(P2PIdentityPayloads.GoogleIdentityC2SPayload.TYPE)) {
                 return;
             }
-            if (!SharedWorldConfig.getInstance().isGoogleSignedIn()) {
+            SharedWorldConfig cfg = SharedWorldConfig.getInstance();
+            if (!cfg.isEnabled() || !cfg.isGoogleSignedIn()) {
                 ClientPlayNetworking.send(new P2PIdentityPayloads.GoogleIdentityC2SPayload(""));
                 return;
             }
@@ -32,9 +33,10 @@ public class FabricP2PClient implements ClientModInitializer {
                     .thenAccept(idToken -> client.execute(() -> {
                         if (client.getConnection() != null
                                 && ClientPlayNetworking.canSend(P2PIdentityPayloads.GoogleIdentityC2SPayload.TYPE)) {
-                            ClientPlayNetworking.send(new P2PIdentityPayloads.GoogleIdentityC2SPayload(
-                                    idToken != null ? idToken : ""
-                            ));
+                            String tokenToSend = (SharedWorldConfig.getInstance().isEnabled() && idToken != null)
+                                    ? idToken
+                                    : "";
+                            ClientPlayNetworking.send(new P2PIdentityPayloads.GoogleIdentityC2SPayload(tokenToSend));
                         }
                     }));
         });

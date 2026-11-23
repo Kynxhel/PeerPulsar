@@ -17,6 +17,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -212,8 +213,8 @@ public class UdpHolePunchService {
                             int peerPort = payload.get("port").getAsInt();
                             int sessionId = payload.get("sid").getAsInt();
 
-                            if (peerPort < 1 || peerPort > 65535 || peerId.length() > 32) continue;
-                            InetAddress parsedIp = InetAddress.getByName(peerIp);
+                            if (peerPort < 1 || peerPort > 65535 || peerId.length() > 32 || !isNumericIpLiteral(peerIp)) continue;
+                            InetAddress parsedIp = InetAddress.ofLiteral(peerIp);
                             if (parsedIp.isLoopbackAddress() || parsedIp.isMulticastAddress() || parsedIp.isAnyLocalAddress()) {
                                 continue;
                             }
@@ -398,9 +399,12 @@ public class UdpHolePunchService {
                                         && peerId.equals(payload.has("to") ? payload.get("to").getAsString() : "")) {
                                     String hIp = payload.get("ip").getAsString();
                                     int hPort = payload.get("port").getAsInt();
-                                    if (hPort >= 1 && hPort <= 65535) {
-                                        hostAddrFuture.complete(new InetSocketAddress(InetAddress.getByName(hIp), hPort));
-                                        break;
+                                    if (hPort >= 1 && hPort <= 65535 && isNumericIpLiteral(hIp)) {
+                                        InetAddress hostIpAddr = InetAddress.ofLiteral(hIp);
+                                        if (!hostIpAddr.isLoopbackAddress() && !hostIpAddr.isMulticastAddress() && !hostIpAddr.isAnyLocalAddress()) {
+                                            hostAddrFuture.complete(new InetSocketAddress(hostIpAddr, hPort));
+                                            break;
+                                        }
                                     }
                                 }
                             } catch (Exception ignored) {}
@@ -442,7 +446,13 @@ public class UdpHolePunchService {
                         udp.receive(rx);
                         if (rx.getLength() >= HEADER_SIZE && rxBuf[0] == MAGIC_0 && rxBuf[1] == MAGIC_1) {
                             byte type = rxBuf[2];
-                            if (type == TYPE_PUNCH || type == TYPE_PUNCH_ACK) {
+                            int rxSid = ByteBuffer.wrap(rxBuf, 4, 4).getInt();
+                            if ((type == TYPE_PUNCH || type == TYPE_PUNCH_ACK)
+                                    && rxSid == sessionId
+                                    && rx.getAddress().equals(hostAddr.getAddress())) {
+                                if (rx.getPort() != hostAddr.getPort()) {
+                                    hostAddr = new InetSocketAddress(rx.getAddress(), rx.getPort());
+                                }
                                 sendPacket(udp, hostAddr, TYPE_PUNCH_ACK, sessionId, 0, null, 0);
                                 punched = true;
                                 break;
@@ -456,6 +466,7 @@ public class UdpHolePunchService {
                     return new ClientProxyResult(false, -1, "UDP hole punch timed out (Symmetric NAT?)");
                 }
 
+                final InetSocketAddress punchedHostAddr = hostAddr;
                 udp.setSoTimeout(0);
                 ServerSocket localServer = new ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"));
                 int localProxyPort = localServer.getLocalPort();
@@ -464,7 +475,7 @@ public class UdpHolePunchService {
                 this.clientLocalServer = localServer;
                 this.clientActive = true;
 
-                PeerSession session = new PeerSession(sessionId, udp, hostAddr, this::stopClientProxy);
+                PeerSession session = new PeerSession(sessionId, udp, punchedHostAddr, this::stopClientProxy);
                 this.clientSession = session;
 
                 this.clientScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -480,7 +491,7 @@ public class UdpHolePunchService {
                 this.clientScheduler.scheduleAtFixedRate(() -> {
                     if (clientActive && !udp.isClosed()) {
                         try {
-                            sendPacket(udp, hostAddr, TYPE_KEEPALIVE, sessionId, 0, null, 0);
+                            sendPacket(udp, session.remoteAddr, TYPE_KEEPALIVE, sessionId, 0, null, 0);
                         } catch (Exception ignored) {}
                     }
                 }, 6, 6, TimeUnit.SECONDS);
@@ -501,7 +512,7 @@ public class UdpHolePunchService {
                             int sid = bb.getInt();
                             int seq = bb.getInt();
                             int pLen = bb.getShort() & 0xFFFF;
-                            if (sid == sessionId) {
+                            if (sid == sessionId && session.acceptsRemoteAddress((InetSocketAddress) p.getSocketAddress())) {
                                 handleSessionPacket(session, type, seq, b, HEADER_SIZE, Math.min(pLen, len - HEADER_SIZE));
                             }
                         } catch (IOException e) {
@@ -515,16 +526,27 @@ public class UdpHolePunchService {
                 // Accept local Minecraft client connection
                 Thread acceptThread = new Thread(() -> {
                     try {
+                        localServer.setSoTimeout(15_000);
                         Socket mcSock = localServer.accept();
                         mcSock.setTcpNoDelay(true);
                         session.attachTcpSocket(mcSock);
-                    } catch (IOException ignored) {}
+                    } catch (SocketTimeoutException e) {
+                        if (clientActive && clientLocalServer == localServer) {
+                            FabricP2PMod.LOGGER.warn("[P2P-UDP] Local proxy accept timed out — cleaning up client proxy.");
+                            stopClientProxy();
+                        }
+                    } catch (IOException e) {
+                        if (clientActive && clientLocalServer == localServer) {
+                            FabricP2PMod.LOGGER.warn("[P2P-UDP] Local proxy accept error ({}) — cleaning up client proxy.", e.getMessage());
+                            stopClientProxy();
+                        }
+                    }
                 }, "FabricP2P-UDP-Client-Accept");
                 acceptThread.setDaemon(true);
                 acceptThread.start();
 
                 FabricP2PMod.LOGGER.info("[P2P-UDP] Direct UDP P2P punched to {}! Local MC proxy on 127.0.0.1:{}",
-                        hostAddr, localProxyPort);
+                        punchedHostAddr, localProxyPort);
                 return new ClientProxyResult(true, localProxyPort, null);
             } catch (Exception e) {
                 FabricP2PMod.LOGGER.error("[P2P-UDP] Client hole punch error: {}", e.getMessage());
@@ -565,7 +587,7 @@ public class UdpHolePunchService {
         } else if (type == TYPE_ACK) {
             session.onAckReceived(seq);
         } else if (type == TYPE_FIN) {
-            session.close();
+            session.onFinReceived(seq);
         }
     }
 
@@ -585,6 +607,11 @@ public class UdpHolePunchService {
         int expectedRecvSeq = 0;
         final TreeMap<Integer, byte[]> reorderBuffer = new TreeMap<>();
         final BlockingQueue<byte[]> tcpWriteQueue = new LinkedBlockingQueue<>(512);
+
+        volatile int finSeq = -1;
+        volatile boolean finReceived = false;
+        volatile boolean finDrained = false;
+        volatile long finReceivedAtMs = 0L;
 
         PeerSession(int sessionId, DatagramSocket udp, InetSocketAddress remoteAddr, Runnable onClose) {
             this.sessionId = sessionId;
@@ -613,6 +640,10 @@ public class UdpHolePunchService {
         }
 
         void attachTcpSocket(Socket tcp) {
+            if (closed.get()) {
+                try { tcp.close(); } catch (Exception ignored) {}
+                return;
+            }
             this.tcpSocket = tcp;
             drainOrderedToQueue();
 
@@ -621,13 +652,34 @@ public class UdpHolePunchService {
                 try {
                     OutputStream out = tcp.getOutputStream();
                     while (!closed.get() && !tcp.isClosed()) {
-                        byte[] chunk = tcpWriteQueue.poll(250, TimeUnit.MILLISECONDS);
-                        if (chunk == null) continue;
-                        out.write(chunk);
-                        while ((chunk = tcpWriteQueue.poll()) != null) {
+                        byte[] chunk = tcpWriteQueue.poll(50, TimeUnit.MILLISECONDS);
+                        if (chunk != null) {
                             out.write(chunk);
+                            while ((chunk = tcpWriteQueue.poll()) != null) {
+                                out.write(chunk);
+                            }
+                            out.flush();
+                            // Immediately advance any packets held in reorderBuffer while tcpWriteQueue was full
+                            drainOrderedToQueue();
                         }
-                        out.flush();
+                        if (finDrained && tcpWriteQueue.isEmpty()) {
+                            drainOrderedToQueue();
+                            if (tcpWriteQueue.isEmpty()) {
+                                out.flush();
+                                try {
+                                    if (!tcp.isClosed() && !tcp.isOutputShutdown()) {
+                                        tcp.shutdownOutput();
+                                    }
+                                } catch (IOException ignored) {}
+                                // Give local MC socket a brief grace window to read flushed disconnect/kick packets before closing
+                                long graceDeadline = System.currentTimeMillis() + 250L;
+                                while (!closed.get() && !tcp.isClosed() && System.currentTimeMillis() < graceDeadline) {
+                                    Thread.sleep(15);
+                                }
+                                close();
+                                break;
+                            }
+                        }
                     }
                 } catch (Exception ignored) {
                     close();
@@ -638,6 +690,7 @@ public class UdpHolePunchService {
 
             Thread tcpReader = new Thread(() -> {
                 byte[] buf = new byte[MAX_PAYLOAD];
+                boolean hitEof = false;
                 try {
                     InputStream in = tcp.getInputStream();
                     int read;
@@ -652,10 +705,27 @@ public class UdpHolePunchService {
                         unacked.put(seq, new SentChunk(payload, System.currentTimeMillis()));
                         sendPacket(udp, remoteAddr, TYPE_DATA, sessionId, seq, payload, read);
                     }
+                    if (!closed.get()) {
+                        hitEof = true;
+                    }
                 } catch (Exception ignored) {
                 } finally {
+                    int finSeqToSend = nextSendSeq.get();
+                    if (hitEof && !closed.get()) {
+                        long drainDeadline = System.currentTimeMillis() + 1500L;
+                        while (!closed.get() && !unacked.isEmpty() && System.currentTimeMillis() < drainDeadline) {
+                            try {
+                                Thread.sleep(15);
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                        }
+                    }
                     try {
-                        sendPacket(udp, remoteAddr, TYPE_FIN, sessionId, 0, null, 0);
+                        if (!udp.isClosed()) {
+                            sendPacket(udp, remoteAddr, TYPE_FIN, sessionId, finSeqToSend, null, 0);
+                        }
                     } catch (Exception ignored) {}
                     close();
                 }
@@ -665,21 +735,48 @@ public class UdpHolePunchService {
         }
 
         void onDataReceived(int seq, byte[] data) {
+            int ackSeq;
             synchronized (recvLock) {
                 if (seq >= expectedRecvSeq && (seq - expectedRecvSeq) < MAX_REORDER_PACKETS
                         && reorderBuffer.size() < MAX_REORDER_PACKETS) {
                     reorderBuffer.putIfAbsent(seq, data);
                 }
                 drainOrderedToQueueLocked();
-                try {
-                    sendPacket(udp, remoteAddr, TYPE_ACK, sessionId, expectedRecvSeq, null, 0);
-                } catch (Exception ignored) {}
+                ackSeq = expectedRecvSeq;
+            }
+            try {
+                sendPacket(udp, remoteAddr, TYPE_ACK, sessionId, ackSeq, null, 0);
+            } catch (Exception ignored) {}
+        }
+
+        void onFinReceived(int seq) {
+            synchronized (recvLock) {
+                if (closed.get()) return;
+                if (!finReceived) {
+                    this.finSeq = seq;
+                    this.finReceived = true;
+                    this.finReceivedAtMs = System.currentTimeMillis();
+                } else if (seq > this.finSeq) {
+                    this.finSeq = seq;
+                }
+                drainOrderedToQueueLocked();
+                checkFinDrainedLocked();
             }
         }
 
         private void drainOrderedToQueue() {
+            int ackToSend = -1;
             synchronized (recvLock) {
+                int before = expectedRecvSeq;
                 drainOrderedToQueueLocked();
+                if (expectedRecvSeq > before) {
+                    ackToSend = expectedRecvSeq;
+                }
+            }
+            if (ackToSend > 0 && !closed.get()) {
+                try {
+                    sendPacket(udp, remoteAddr, TYPE_ACK, sessionId, ackToSend, null, 0);
+                } catch (Exception ignored) {}
             }
         }
 
@@ -691,6 +788,13 @@ public class UdpHolePunchService {
                 }
                 reorderBuffer.remove(expectedRecvSeq);
                 expectedRecvSeq++;
+            }
+            checkFinDrainedLocked();
+        }
+
+        private void checkFinDrainedLocked() {
+            if (finReceived && !finDrained && (finSeq <= 0 || expectedRecvSeq >= finSeq)) {
+                finDrained = true;
             }
         }
 
@@ -710,6 +814,24 @@ public class UdpHolePunchService {
                 FabricP2PMod.LOGGER.info("[P2P-UDP] Session {} timed out after inactivity.", sessionId);
                 close();
                 return;
+            }
+            if (finReceived) {
+                if (!finDrained && now - finReceivedAtMs >= 1500L) {
+                    synchronized (recvLock) {
+                        drainOrderedToQueueLocked();
+                        finDrained = true;
+                    }
+                    if (tcpSocket == null) {
+                        close();
+                        return;
+                    }
+                } else if (finDrained && tcpSocket == null && now - finReceivedAtMs >= 1500L) {
+                    close();
+                    return;
+                } else if (finDrained && now - finReceivedAtMs >= 3000L) {
+                    close();
+                    return;
+                }
             }
             if (unacked.isEmpty()) return;
 
@@ -759,6 +881,33 @@ public class UdpHolePunchService {
 
     // ==================== STUN & SIGNALING HELPERS ====================
 
+    private static boolean isNumericIpLiteral(String ip) {
+        if (ip == null || ip.isEmpty() || ip.length() > 45) return false;
+        if (ip.indexOf(':') < 0) {
+            String[] parts = ip.split("\\.", -1);
+            if (parts.length != 4) return false;
+            for (String p : parts) {
+                if (p.isEmpty() || p.length() > 3) return false;
+                int val = 0;
+                for (int i = 0; i < p.length(); i++) {
+                    char c = p.charAt(i);
+                    if (c < '0' || c > '9') return false;
+                    val = val * 10 + (c - '0');
+                }
+                if (val > 255) return false;
+            }
+            return true;
+        }
+        int doubleColon = ip.indexOf("::");
+        if (doubleColon >= 0 && ip.indexOf("::", doubleColon + 2) >= 0) return false;
+        for (int i = 0; i < ip.length(); i++) {
+            char c = ip.charAt(i);
+            boolean hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+            if (!hex && c != ':' && c != '.') return false;
+        }
+        return true;
+    }
+
     private static void sendPacket(DatagramSocket udp, InetSocketAddress dst, byte type, int sessionId, int seq, byte[] payload, int len) throws IOException {
         int payloadLen = (payload != null) ? len : 0;
         ByteBuffer bb = ByteBuffer.allocate(HEADER_SIZE + payloadLen);
@@ -791,49 +940,85 @@ public class UdpHolePunchService {
         try {
             oldTimeout = socket.getSoTimeout();
             savedTimeout = true;
-            socket.setSoTimeout(2000);
+
+            int tx0 = ThreadLocalRandom.current().nextInt();
+            int tx1 = ThreadLocalRandom.current().nextInt();
+            int tx2 = ThreadLocalRandom.current().nextInt();
 
             ByteBuffer req = ByteBuffer.allocate(20);
             req.putShort((short) 0x0001);
             req.putShort((short) 0x0000);
             req.putInt(0x2112A442);
-            for (int i = 0; i < 3; i++) req.putInt(ThreadLocalRandom.current().nextInt());
+            req.putInt(tx0);
+            req.putInt(tx1);
+            req.putInt(tx2);
             byte[] tx = req.array();
             socket.send(new DatagramPacket(tx, tx.length, resolveIpv4(host), port));
 
             byte[] rx = new byte[512];
-            DatagramPacket rxPkt = new DatagramPacket(rx, rx.length);
-            socket.receive(rxPkt);
+            long deadline = System.currentTimeMillis() + 2000L;
+            while (true) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) break;
+                socket.setSoTimeout((int) Math.max(1L, remaining));
 
-            ByteBuffer resp = ByteBuffer.wrap(rxPkt.getData(), 0, rxPkt.getLength());
-            if (resp.remaining() < 20) return null;
-            short msgType = resp.getShort();
-            resp.getShort();
-            int cookie = resp.getInt();
-            if (msgType != (short) 0x0101 || cookie != 0x2112A442) return null;
-
-            resp.position(20);
-            while (resp.remaining() >= 4) {
-                short attrType = resp.getShort();
-                int attrLen = resp.getShort() & 0xFFFF;
-                int attrStart = resp.position();
-                if (resp.remaining() < attrLen) break;
-
-                if (attrType == 0x0020 && attrLen >= 8) {
-                    resp.get();
-                    byte family = resp.get();
-                    int xPort = (resp.getShort() & 0xFFFF) ^ 0x2112;
-                    if (family == 0x01) {
-                        byte[] ipBytes = new byte[4];
-                        resp.get(ipBytes);
-                        for (int i = 0; i < 4; i++) {
-                            ipBytes[i] = (byte) (ipBytes[i] ^ ((0x2112A442 >> (24 - i * 8)) & 0xFF));
-                        }
-                        return new InetSocketAddress(InetAddress.getByAddress(ipBytes), xPort);
-                    }
+                DatagramPacket rxPkt = new DatagramPacket(rx, rx.length);
+                try {
+                    socket.receive(rxPkt);
+                } catch (SocketTimeoutException e) {
+                    break;
                 }
-                int padded = (attrLen + 3) & ~3;
-                resp.position(Math.min(resp.limit(), attrStart + padded));
+
+                ByteBuffer resp = ByteBuffer.wrap(rxPkt.getData(), 0, rxPkt.getLength());
+                if (resp.remaining() < 20) continue;
+                short msgType = resp.getShort();
+                int msgLen = resp.getShort() & 0xFFFF;
+                int cookie = resp.getInt();
+                int rTx0 = resp.getInt();
+                int rTx1 = resp.getInt();
+                int rTx2 = resp.getInt();
+                if (msgType != (short) 0x0101 || cookie != 0x2112A442
+                        || rTx0 != tx0 || rTx1 != tx1 || rTx2 != tx2) {
+                    continue;
+                }
+
+                resp.limit(Math.min(resp.limit(), 20 + msgLen));
+                InetSocketAddress fallbackMapped = null;
+                while (resp.remaining() >= 4) {
+                    short attrType = resp.getShort();
+                    int attrLen = resp.getShort() & 0xFFFF;
+                    int attrStart = resp.position();
+                    if (resp.remaining() < attrLen) break;
+
+                    if (attrType == 0x0020 && attrLen >= 8) {
+                        resp.get();
+                        byte family = resp.get();
+                        int xPort = (resp.getShort() & 0xFFFF) ^ 0x2112;
+                        if (family == 0x01) {
+                            byte[] ipBytes = new byte[4];
+                            resp.get(ipBytes);
+                            for (int i = 0; i < 4; i++) {
+                                ipBytes[i] = (byte) (ipBytes[i] ^ ((0x2112A442 >> (24 - i * 8)) & 0xFF));
+                            }
+                            return new InetSocketAddress(InetAddress.getByAddress(ipBytes), xPort);
+                        }
+                    } else if (attrType == 0x0001 && attrLen >= 8 && fallbackMapped == null) {
+                        resp.get();
+                        byte family = resp.get();
+                        int mappedPort = resp.getShort() & 0xFFFF;
+                        if (family == 0x01) {
+                            byte[] ipBytes = new byte[4];
+                            resp.get(ipBytes);
+                            fallbackMapped = new InetSocketAddress(InetAddress.getByAddress(ipBytes), mappedPort);
+                        }
+                    }
+                    int padded = (attrLen + 3) & ~3;
+                    resp.position(Math.min(resp.limit(), attrStart + padded));
+                }
+                if (fallbackMapped != null) {
+                    return fallbackMapped;
+                }
+                return null;
             }
         } catch (Exception ignored) {
         } finally {

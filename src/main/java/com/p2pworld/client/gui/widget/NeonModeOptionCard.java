@@ -54,7 +54,7 @@ public class NeonModeOptionCard extends AbstractButton {
 
     @Override
     public void onPress(InputWithModifiers input) {
-        if (this.active && this.supportedSupplier.getAsBoolean() && this.onSelectAction != null) {
+        if (this.active && !this.testingSupplier.getAsBoolean() && this.supportedSupplier.getAsBoolean() && this.onSelectAction != null) {
             this.onSelectAction.run();
         }
     }
@@ -131,25 +131,36 @@ public class NeonModeOptionCard extends AbstractButton {
 
         // Title + "(Recommended)" badge
         int titleX = x + 18;
+        int maxTextW = Math.max(20, w - 22);
         int titleColor = supported ? NeonTheme.TEXT_PRIMARY : (testing ? NeonTheme.TEXT_SECONDARY : 0xFF9E7B82);
-        graphics.text(font, Component.literal(this.title).withStyle(selected ? ChatFormatting.BOLD : ChatFormatting.RESET),
-                titleX, y + 6, titleColor, selected);
+        String drawnTitle = this.title != null ? this.title : "";
+        if (font.width(drawnTitle) > maxTextW) {
+            drawnTitle = font.plainSubstrByWidth(drawnTitle, maxTextW);
+        }
+        Component titleComp = Component.literal(drawnTitle).withStyle(selected ? ChatFormatting.BOLD : ChatFormatting.RESET);
+        graphics.text(font, titleComp, titleX, y + 6, titleColor, selected);
 
         if (recommended) {
-            int recX = titleX + font.width(this.title) + 4;
+            int recX = titleX + font.width(titleComp) + 4;
             String recTag = "(Recommended)";
             if (recX + font.width(recTag) <= x + w - 4) {
                 graphics.text(font, recTag, recX, y + 6, NeonTheme.withAlpha(NeonTheme.EMERALD, 255), false);
-            } else {
-                // Compact fallback if narrow
+            } else if (recX + font.width("(Rec)") <= x + w - 4) {
                 graphics.text(font, "(Rec)", recX, y + 6, NeonTheme.withAlpha(NeonTheme.EMERALD, 255), false);
             }
-        } else if (selected) {
+        } else if (selected && titleX + font.width(titleComp) + 4 <= x + w - 12) {
             graphics.text(font, "✓", x + w - 12, y + 6, NeonTheme.withAlpha(this.accentRgb, 255), true);
         }
 
         // Subtitle (speed / reason)
-        String sub = this.subtitleSupplier.get();
+        String rawSub = this.subtitleSupplier.get();
+        String sub = rawSub != null ? rawSub : "";
+        if (font.width(sub) > maxTextW) {
+            int ellW = font.width("...");
+            sub = maxTextW > ellW
+                    ? font.plainSubstrByWidth(sub, maxTextW - ellW) + "..."
+                    : font.plainSubstrByWidth(sub, maxTextW);
+        }
         int subColor = testing
                 ? NeonTheme.withAlpha(NeonTheme.AMBER, 230)
                 : (supported ? NeonTheme.TEXT_SECONDARY : NeonTheme.withAlpha(NeonTheme.CRIMSON, 215));

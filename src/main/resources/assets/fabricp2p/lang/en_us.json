@@ -1,20 +1,14 @@
 {
-  "mod.fabricp2p.name": "Fabric P2P World",
   "menu.fabricp2p.start_p2p": "Start P2P",
   "menu.fabricp2p.p2p_active": "P2P LIVE",
   "menu.fabricp2p.join_p2p": "Join P2P",
   "menu.fabricp2p.shared_worlds": "Shared Worlds",
-
   "screen.fabricp2p.host.title": "Fabric P2P — Host World",
   "screen.fabricp2p.host.subtitle": "Neon Control Center • Peer-to-Peer Host",
   "screen.fabricp2p.host.badge_live": "LIVE",
   "screen.fabricp2p.host.badge_standby": "STANDBY",
-
   "screen.fabricp2p.host.upnp_idle": "READY • Click Test to check Direct P2P / NAT",
-  "screen.fabricp2p.host.upnp_searching": "DISCOVERING UPnP ROUTER...",
   "screen.fabricp2p.host.upnp_ok": "DIRECT P2P LIVE • UPnP Port Forwarded",
-  "screen.fabricp2p.host.upnp_failed": "UPnP UNAVAILABLE • Switching to Tunnel Fallback",
-
   "screen.fabricp2p.host.diag_testing": "TESTING INTERNET, UPnP & CGNAT...",
   "screen.fabricp2p.host.diag_direct_ok": "DIRECT P2P SUPPORTED • Open NAT + UPnP Ready",
   "screen.fabricp2p.host.diag_cgnat_udp": "CGNAT (Cone NAT) → Direct UDP Hole Punch Ready!",
@@ -27,7 +21,6 @@
   "screen.fabricp2p.host.status_udp_live": "UDP HOLE PUNCH LIVE • Direct P2P Through CGNAT",
   "screen.fabricp2p.host.status_tunnel_live": "TUNNEL RELAY LIVE • CGNAT/NAT Bypass Active",
   "screen.fabricp2p.host.status_lan_live": "LOCAL LAN LIVE • Same Network Only",
-
   "screen.fabricp2p.host.side_menu_title": "CONNECTION MODE",
   "screen.fabricp2p.host.mode_direct_title": "Direct P2P",
   "screen.fabricp2p.host.mode_direct_ok": "0ms • Open NAT + UPnP",
@@ -46,14 +39,12 @@
   "screen.fabricp2p.host.mode_no_internet": "No Internet",
   "screen.fabricp2p.host.legend_supported": "Supported",
   "screen.fabricp2p.host.legend_unsupported": "Unsupported",
-
   "screen.fabricp2p.host.btn_retest": "⚡ Test",
   "screen.fabricp2p.host.btn_testing_net": "⏳ TESTING NET...",
   "screen.fabricp2p.host.btn_start_udp": "⚡ START UDP P2P",
   "screen.fabricp2p.host.btn_start_tunnel": "⚡ START VIA TUNNEL",
   "screen.fabricp2p.host.btn_start_lan": "▶ START LOCAL LAN",
   "screen.fabricp2p.host.btn_unsupported": "✕ NET UNSUPPORTED",
-
   "screen.fabricp2p.host.toast_diag_direct": "✦ Direct P2P supported! Open NAT & UPnP verified.",
   "screen.fabricp2p.host.toast_diag_udp": "⚡ Cone NAT verified — Direct 0ms UDP Hole Punch ready!",
   "screen.fabricp2p.host.toast_diag_cgnat_tunnel": "⚡ CGNAT detected — Automatic Tunnel Fallback ready (%sms)!",
@@ -61,13 +52,11 @@
   "screen.fabricp2p.host.toast_diag_blocked": "⚠ Direct P2P & Tunnel blocked! Check firewall/ISP.",
   "screen.fabricp2p.host.toast_diag_offline": "⚠ No internet connection detected.",
   "screen.fabricp2p.host.toast_started_tunnel": "⚡ Tunnel Relay LIVE! Room Code: %s",
-
   "screen.fabricp2p.host.label_ext_ip": "EXTERNAL IP",
   "screen.fabricp2p.host.label_lan_ip": "LOCAL LAN",
   "screen.fabricp2p.host.label_players": "PLAYERS",
   "screen.fabricp2p.host.label_room_code": "ROOM CODE:",
   "screen.fabricp2p.host.room_code_placeholder": "Room code will be generated once hosting starts",
-
   "screen.fabricp2p.host.card_offline_title": "OFFLINE LAN AUTH",
   "screen.fabricp2p.host.card_offline_on": "ENABLED • Local / Offline Mode",
   "screen.fabricp2p.host.card_offline_off": "DISABLED • Mojang Online Auth",
@@ -78,20 +67,17 @@
   "screen.fabricp2p.host.card_port_title": "PORT CONFIGURATION",
   "screen.fabricp2p.host.card_port_default": "25565 • Default Port",
   "screen.fabricp2p.host.card_port_random": "Random Ephemeral Pool",
-
   "screen.fabricp2p.host.btn_start": "▶ START P2P WORLD",
   "screen.fabricp2p.host.btn_starting": "⏳ STARTING...",
   "screen.fabricp2p.host.btn_stop": "■ STOP P2P HOST",
   "screen.fabricp2p.host.btn_copy_raw": "✦ Copy Code",
   "screen.fabricp2p.host.btn_copy_invite": "✦ COPY DISCORD INVITE",
-
   "screen.fabricp2p.host.toast_code_copied": "✦ Room code copied to clipboard: %s",
   "screen.fabricp2p.host.toast_invite_copied": "✦ Discord invite copied to clipboard!",
   "screen.fabricp2p.host.toast_start_first": "⚠ Start P2P hosting first!",
   "screen.fabricp2p.host.toast_started": "✦ P2P World is LIVE! Room Code: %s",
   "screen.fabricp2p.host.toast_start_error": "⚠ Failed to start P2P host (port may be in use).",
   "screen.fabricp2p.host.toast_stopped": "■ P2P hosting stopped and UPnP mapping cleared.",
-
   "screen.fabricp2p.join.title": "Join P2P World",
   "screen.fabricp2p.join.header": "P2P PORTAL CONNECT",
   "screen.fabricp2p.join.instruction": "Enter a Room Code or IP:Port to connect instantly",
@@ -107,7 +93,6 @@
   "screen.fabricp2p.join.resolved_udp_hint": "Direct CGNAT-bypass UDP P2P — click Join World to punch!",
   "screen.fabricp2p.join.toast_punching": "⚡ Exchanging STUN endpoints & punching through NAT...",
   "screen.fabricp2p.join.toast_punch_fail": "⚠ UDP Hole Punch failed: %s",
-
   "screen.fabricp2p.join.status_idle": "Status: Waiting for a room code or address...",
   "screen.fabricp2p.join.tip_discord": "Tip: You can paste an entire Discord invite — the code is auto-extracted!",
   "screen.fabricp2p.join.resolved": "✦ Target Resolved: %s",
@@ -117,11 +102,9 @@
   "screen.fabricp2p.join.players": "Players: %s/%s",
   "screen.fabricp2p.join.offline_title": "OFFLINE / UNREACHABLE",
   "screen.fabricp2p.join.offline_hint": "Check if the host's P2P world is live and port is reachable.",
-
   "screen.fabricp2p.join.toast_pasted": "✦ Clipboard parsed automatically!",
   "screen.fabricp2p.join.toast_ping_ok": "✦ Server is ONLINE! Latency: %s ms",
   "screen.fabricp2p.join.toast_ping_fail": "⚠ Could not reach server (%s)",
-
   "screen.fabricp2p.shared.title": "Shared Cloud Worlds",
   "screen.fabricp2p.shared.subtitle": "Rotating Host • Google Drive / OneDrive / Syncthing Sync",
   "screen.fabricp2p.shared.card_enable_title": "SHARED WORLDS",
@@ -146,5 +129,28 @@
   "screen.fabricp2p.shared.toast_disabled": "Shared Cloud Worlds disabled.",
   "screen.fabricp2p.shared.toast_folder_ok": "✅ Shared sync folder saved & verified!",
   "screen.fabricp2p.shared.toast_folder_invalid": "⚠ Folder does not exist! Check the path.",
-  "screen.fabricp2p.shared.toast_refreshed": "⟳ Found %s shared world(s)."
+  "screen.fabricp2p.shared.toast_folder_cleared": "Local sync folder cleared.",
+  "screen.fabricp2p.shared.toast_using_drive": "☁ Using Google Drive direct sync.",
+  "screen.fabricp2p.shared.toast_refreshed": "⟳ Found %s shared world(s).",
+  "screen.fabricp2p.shared.toast_refresh_error": "⚠ Failed to refresh worlds: %s",
+  "screen.fabricp2p.shared.toast_invalid_lock_code": "⚠ Invalid live room code in lockfile.",
+  "screen.fabricp2p.shared.toast_joining_udp": "⚡ Joining %s via UDP Hole Punch...",
+  "screen.fabricp2p.shared.toast_udp_fail": "⚠ UDP Join failed: %s",
+  "screen.fabricp2p.shared.toast_pulling": "☁ Pulling latest '%s' (Rev #%s)...",
+  "screen.fabricp2p.shared.toast_signed_out": "Signed out of Google.",
+  "screen.fabricp2p.shared.toast_google_opening": "🌐 Opening Google Account Picker in browser...",
+  "screen.fabricp2p.shared.toast_google_ok": "✅ Signed in as %s!",
+  "screen.fabricp2p.shared.toast_google_fail": "⚠ Google Sign-In failed: %s",
+  "screen.fabricp2p.shared.toast_uploading": "☁ Syncing changed world files (SHA-256 delta)...",
+  "screen.fabricp2p.shared.toast_op_failed": "⚠ Operation failed.",
+  "screen.fabricp2p.shared.btn_next": "Next ▸",
+  "screen.fabricp2p.shared.btn_google_waiting": "⏳ WAITING FOR GOOGLE LOGIN...",
+  "screen.fabricp2p.shared.btn_google_signed_in_prefix": "● Google: ",
+  "screen.fabricp2p.shared.btn_google_signed_in_suffix": " (Sign Out)",
+  "screen.fabricp2p.shared.btn_join_live": "▶ JOIN %s'S LIVE WORLD",
+  "screen.fabricp2p.shared.btn_pull_rev": "☁ PULL LATEST (REV #%s) TO SAVES",
+  "screen.fabricp2p.shared.badge_on": "ON",
+  "screen.fabricp2p.shared.badge_off": "OFF",
+  "screen.fabricp2p.shared.status_live": "● LIVE — Hosted by %s • Rev #%s",
+  "screen.fabricp2p.shared.status_standby": "○ STANDBY — Last host: %s • Rev #%s"
 }

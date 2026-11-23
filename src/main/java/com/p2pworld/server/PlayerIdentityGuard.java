@@ -6,11 +6,16 @@ import com.google.gson.reflect.TypeToken;
 import com.p2pworld.FabricP2PMod;
 import com.p2pworld.client.shared.GoogleAuthService;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.LevelResource;
 
 import java.lang.reflect.Type;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,26 +40,105 @@ public final class PlayerIdentityGuard {
     private static final Type MAP_TYPE = new TypeToken<Map<String, String>>() {}.getType();
     private static final String IDENTITY_FILE = "fabricp2p_identities.json";
     private static final String HASH_PREFIX = "sha256:";
+    private static final long VERIFICATION_TIMEOUT_SECONDS = 6L;
+    private static final double ANCHOR_DRIFT_LIMIT_SQR = 0.5 * 0.5;
+
+    private record PendingAnchor(
+            ResourceKey<Level> dimension,
+            double x,
+            double y,
+            double z,
+            float yRot,
+            float xRot
+    ) {}
 
     private static final AtomicLong JOIN_SEQ = new AtomicLong(0);
     private static final Map<UUID, Long> activeJoinToken = new ConcurrentHashMap<>();
     private static final Set<UUID> verifiedThisSession = ConcurrentHashMap.newKeySet();
+    private static final Map<UUID, PendingAnchor> pendingVerification = new ConcurrentHashMap<>();
 
     private PlayerIdentityGuard() {}
 
     private static boolean isLocalHostPlayer(ServerPlayer player, MinecraftServer server) {
-        return server.isSingleplayerOwner(player.nameAndId())
-                && "local".equalsIgnoreCase(player.getIpAddress());
+        if (!server.isSingleplayerOwner(player.nameAndId())) {
+            return false;
+        }
+        if (player.connection == null) {
+            return false;
+        }
+        SocketAddress remoteAddr = player.connection.getRemoteAddress();
+        return remoteAddr == null || !(remoteAddr instanceof InetSocketAddress);
+    }
+
+    /**
+     * Returns true if the player has a bound username and has not yet completed Google OIDC verification.
+     * While true, movement and world interactions are restricted by the server.
+     */
+    public static boolean isPendingVerification(UUID uuid) {
+        return uuid != null && pendingVerification.containsKey(uuid);
+    }
+
+    /**
+     * Keeps any pending-verification players anchored at their join position so unverified spoofers
+     * cannot roam, push entities, or interact with the world during the verification grace window.
+     */
+    public static void enforcePendingAnchors(MinecraftServer server) {
+        if (server == null || pendingVerification.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<UUID, PendingAnchor> entry : pendingVerification.entrySet()) {
+            UUID uuid = entry.getKey();
+            PendingAnchor anchor = entry.getValue();
+            ServerPlayer player = server.getPlayerList().getPlayer(uuid);
+            if (player == null) {
+                pendingVerification.remove(uuid);
+                continue;
+            }
+            if (player.connection == null) {
+                continue;
+            }
+            if (!player.level().dimension().equals(anchor.dimension())) {
+                ServerLevel targetLevel = server.getLevel(anchor.dimension());
+                if (targetLevel != null) {
+                    player.teleportTo(
+                            targetLevel,
+                            anchor.x(),
+                            anchor.y(),
+                            anchor.z(),
+                            Set.of(),
+                            player.getYRot(),
+                            player.getXRot(),
+                            false
+                    );
+                    player.setDeltaMovement(0.0, 0.0, 0.0);
+                    player.resetFallDistance();
+                }
+                continue;
+            }
+            if (player.distanceToSqr(anchor.x(), anchor.y(), anchor.z()) > ANCHOR_DRIFT_LIMIT_SQR) {
+                player.setDeltaMovement(0.0, 0.0, 0.0);
+                player.resetFallDistance();
+                player.connection.teleport(
+                        anchor.x(),
+                        anchor.y(),
+                        anchor.z(),
+                        player.getYRot(),
+                        player.getXRot()
+                );
+            }
+        }
     }
 
     /**
      * Called when a player joins the server. If their username is already bound to a Google account,
-     * they must present a valid Google-signed id_token matching that account within 8 seconds or be disconnected.
+     * they are held in a restricted pending-verification state and must present a valid Google-signed
+     * id_token matching that account within 6 seconds or be disconnected.
      */
     public static void onPlayerJoin(ServerPlayer player, MinecraftServer server) {
         if (server == null || player == null) return;
         UUID uuid = player.getUUID();
         verifiedThisSession.remove(uuid);
+        pendingVerification.remove(uuid);
         long joinToken = JOIN_SEQ.incrementAndGet();
         activeJoinToken.put(uuid, joinToken);
 
@@ -72,8 +156,18 @@ public final class PlayerIdentityGuard {
             return; // Not yet bound to any Google account
         }
 
-        // Wait up to 8 seconds for client to refresh/send & server to verify Google OIDC id_token
-        CompletableFuture.delayedExecutor(8, TimeUnit.SECONDS).execute(() -> {
+        // Freeze interactions and anchor join position until OIDC token verification completes
+        pendingVerification.put(uuid, new PendingAnchor(
+                player.level().dimension(),
+                player.getX(),
+                player.getY(),
+                player.getZ(),
+                player.getYRot(),
+                player.getXRot()
+        ));
+
+        // Wait up to 6 seconds for client to refresh/send & server to verify Google OIDC id_token
+        CompletableFuture.delayedExecutor(VERIFICATION_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() -> {
             if (!server.isRunning()) return;
             server.execute(() -> {
                 Long currentToken = activeJoinToken.get(uuid);
@@ -82,6 +176,7 @@ public final class PlayerIdentityGuard {
                     return;
                 }
                 if (!verifiedThisSession.contains(uuid)) {
+                    pendingVerification.remove(uuid);
                     ServerPlayer target = server.getPlayerList().getPlayer(uuid);
                     if (target != null) {
                         FabricP2PMod.LOGGER.warn("[IdentityGuard] Kicked unverified player '{}' (bound to Google account).",
@@ -102,6 +197,7 @@ public final class PlayerIdentityGuard {
      */
     public static boolean verifyAndBind(ServerPlayer player, GoogleAuthService.VerifiedGoogleIdentity verified, MinecraftServer server) {
         if (player == null || server == null) return false;
+        UUID uuid = player.getUUID();
         String username = player.getName().getString();
         String usernameKey = username.toLowerCase(Locale.ROOT);
 
@@ -126,9 +222,11 @@ public final class PlayerIdentityGuard {
 
             if (!matches) {
                 if (isLocalHostPlayer(player, server)) {
-                    verifiedThisSession.add(player.getUUID());
+                    pendingVerification.remove(uuid);
+                    verifiedThisSession.add(uuid);
                     return true;
                 }
+                pendingVerification.remove(uuid);
                 FabricP2PMod.LOGGER.warn("[IdentityGuard] Blocked nickname spoof for '{}'!", username);
                 player.connection.disconnect(Component.literal(
                         "§c[FabricP2P] Access Denied!\n§7Username '" + username
@@ -136,7 +234,8 @@ public final class PlayerIdentityGuard {
                 ));
                 return false;
             }
-            verifiedThisSession.add(player.getUUID());
+            pendingVerification.remove(uuid);
+            verifiedThisSession.add(uuid);
             return true;
         }
 
@@ -144,7 +243,8 @@ public final class PlayerIdentityGuard {
         if (verified != null && verified.email() != null && verified.email().contains("@")) {
             bindings.put(usernameKey, computeIdentityHash(verified.email()));
             saveBindings(server, bindings);
-            verifiedThisSession.add(player.getUUID());
+            pendingVerification.remove(uuid);
+            verifiedThisSession.add(uuid);
             FabricP2PMod.LOGGER.info("[IdentityGuard] Bound username '{}' to verified Google account.", username);
             player.sendSystemMessage(Component.literal(
                     "§a🔒 [FabricP2P] §fUsername §b" + username + " §fis now protected by your verified Google account!"
@@ -152,12 +252,21 @@ public final class PlayerIdentityGuard {
             return true;
         }
 
+        pendingVerification.remove(uuid);
         return true;
     }
 
     public static void onPlayerDisconnect(UUID uuid) {
+        if (uuid == null) return;
         verifiedThisSession.remove(uuid);
         activeJoinToken.remove(uuid);
+        pendingVerification.remove(uuid);
+    }
+
+    public static void onServerStopped() {
+        verifiedThisSession.clear();
+        activeJoinToken.clear();
+        pendingVerification.clear();
     }
 
     private static String computeIdentityHash(String normalizedEmail) {

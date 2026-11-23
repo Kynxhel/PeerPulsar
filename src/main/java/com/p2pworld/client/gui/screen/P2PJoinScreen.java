@@ -16,6 +16,8 @@ import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.network.chat.Component;
 
+import java.util.concurrent.CompletionException;
+
 public class P2PJoinScreen extends Screen {
     private final Screen parent;
     private final ParticleBackground particleBg = new ParticleBackground();
@@ -152,19 +154,34 @@ public class P2PJoinScreen extends Screen {
         }
     }
 
+    private static String extractErrorMessage(Throwable err) {
+        if (err == null) return "error";
+        Throwable cause = (err instanceof CompletionException && err.getCause() != null) ? err.getCause() : err;
+        String msg = cause.getMessage();
+        return (msg != null && !msg.isBlank()) ? msg : cause.getClass().getSimpleName();
+    }
+
     private void testConnection() {
         if (this.parsedTarget == null || this.parsedTarget.isUdpHolePunch() || this.minecraft == null || this.isTesting) return;
         RoomCodeHelper.ConnectionTarget target = this.parsedTarget;
 
         this.isTesting = true;
-        this.activeOpTargetLabel = target.host() + ":" + target.port();
+        this.activeOpTargetLabel = RoomCodeHelper.formatHostPort(target.host(), target.port());
         this.lastPingResult = null;
         syncButtonStates();
 
-        P2PNetworkManager.getInstance().pingTarget(target.host(), target.port()).thenAccept(res -> {
+        P2PNetworkManager.getInstance().pingTarget(target.host(), target.port()).whenComplete((res, err) -> {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
                 this.isTesting = false;
+                if (err != null || res == null) {
+                    String reason = extractErrorMessage(err);
+                    this.lastPingResult = new P2PNetworkManager.PingResult(false, -1, "UNREACHABLE", null, -1, -1, reason);
+                    syncButtonStates();
+                    particleBg.spawnBurst(this.width / 2.0f, this.height / 2.0f + 10, NeonTheme.CRIMSON, 18);
+                    showToast(tr("screen.fabricp2p.join.toast_ping_fail", reason), NeonTheme.CRIMSON);
+                    return;
+                }
                 this.lastPingResult = res;
                 syncButtonStates();
 
@@ -189,10 +206,15 @@ public class P2PJoinScreen extends Screen {
             syncButtonStates();
             showToast(tr("screen.fabricp2p.join.toast_punching"), NeonTheme.CYAN);
 
-            UdpHolePunchService.getInstance().startClientProxyAsync(target.host()).thenAccept(res -> {
+            UdpHolePunchService.getInstance().startClientProxyAsync(target.host()).whenComplete((res, err) -> {
                 if (this.minecraft == null) return;
                 this.minecraft.execute(() -> {
                     this.isPunching = false;
+                    if (err != null || res == null) {
+                        syncButtonStates();
+                        showToast(tr("screen.fabricp2p.join.toast_punch_fail", extractErrorMessage(err)), NeonTheme.CRIMSON);
+                        return;
+                    }
                     if (res.success()) {
                         ServerData serverData = new ServerData(
                                 "UDP P2P (" + target.host() + ")",
@@ -216,9 +238,10 @@ public class P2PJoinScreen extends Screen {
             return;
         }
 
+        String formattedAddr = RoomCodeHelper.formatHostPort(target.host(), target.port());
         ServerData serverData = new ServerData(
                 "P2P World (" + target.host() + ")",
-                target.host() + ":" + target.port(),
+                formattedAddr,
                 ServerData.Type.OTHER
         );
 
@@ -298,7 +321,7 @@ public class P2PJoinScreen extends Screen {
                     panelLeft + 20, teleY + 8, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
             NeonRenderUtils.drawScannerBar(graphics, panelLeft + 20, teleY + 24, panelW - 40, NeonTheme.CYAN, timeSec);
         } else if (isTesting) {
-            String targetText = currentTarget != null ? (currentTarget.host() + ":" + currentTarget.port()) : activeOpTargetLabel;
+            String targetText = currentTarget != null ? RoomCodeHelper.formatHostPort(currentTarget.host(), currentTarget.port()) : activeOpTargetLabel;
             graphics.text(this.font, tr("screen.fabricp2p.join.scanning", targetText),
                     panelLeft + 20, teleY + 8, NeonTheme.withAlpha(NeonTheme.AMBER, 255), true);
             NeonRenderUtils.drawScannerBar(graphics, panelLeft + 20, teleY + 24, panelW - 40, NeonTheme.AMBER, timeSec);
@@ -310,7 +333,7 @@ public class P2PJoinScreen extends Screen {
                         : "";
                 graphics.text(this.font, tr("screen.fabricp2p.join.online_label", lastPingResult.latencyMs()) + players,
                         panelLeft + 46, teleY + 7, NeonTheme.withAlpha(NeonTheme.EMERALD, 255), true);
-                String fallbackAddr = currentTarget != null ? (currentTarget.host() + ":" + currentTarget.port()) : activeOpTargetLabel;
+                String fallbackAddr = currentTarget != null ? RoomCodeHelper.formatHostPort(currentTarget.host(), currentTarget.port()) : activeOpTargetLabel;
                 String sub = (lastPingResult.motd() != null && !lastPingResult.motd().isEmpty())
                         ? lastPingResult.motd()
                         : fallbackAddr;
@@ -326,7 +349,7 @@ public class P2PJoinScreen extends Screen {
         } else if (currentTarget != null) {
             String targetLabel = currentTarget.isUdpHolePunch()
                     ? tr("screen.fabricp2p.join.resolved_udp", currentTarget.host())
-                    : tr("screen.fabricp2p.join.resolved", currentTarget.host() + ":" + currentTarget.port());
+                    : tr("screen.fabricp2p.join.resolved", RoomCodeHelper.formatHostPort(currentTarget.host(), currentTarget.port()));
             String hintLabel = currentTarget.isUdpHolePunch()
                     ? tr("screen.fabricp2p.join.resolved_udp_hint")
                     : tr("screen.fabricp2p.join.resolved_hint");

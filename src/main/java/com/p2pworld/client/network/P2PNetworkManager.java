@@ -22,6 +22,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 public class P2PNetworkManager {
@@ -56,6 +58,8 @@ public class P2PNetworkManager {
     private volatile GameType selectedGameType = GameType.SURVIVAL;
     private volatile boolean allowCheats = false;
     private volatile boolean useDefaultPort = true;
+    private final AtomicLong hostGeneration = new AtomicLong(0);
+    private final AtomicBoolean suppressNextUdpClientStop = new AtomicBoolean(false);
 
     private P2PNetworkManager() {
         TunnelRelayService.getInstance().setUnexpectedDisconnectHandler(this::onTunnelDroppedUnexpectedly);
@@ -247,25 +251,43 @@ public class P2PNetworkManager {
             return;
         }
 
+        final long gen = this.hostGeneration.incrementAndGet();
         this.starting = true;
         this.lastErrorMessage = null;
 
         CompletableFuture.runAsync(() -> {
+            boolean didPublish = false;
+            boolean didUpnp = false;
+            boolean didUdp = false;
+            boolean didTunnel = false;
             try {
-                // 1. Ensure network diagnostics have been evaluated (except for Local LAN)
-                NetworkDiagnosticsService diag = NetworkDiagnosticsService.getInstance();
-                NetworkDiagnosticsService.DiagnosticReport report = diag.hasRecentReport()
-                        ? diag.getLastReport()
-                        : diag.runDiagnosticsAsync().get(12, TimeUnit.SECONDS);
-                syncSelectedModeWithDiagnostics(report);
+                // 1. Evaluate network diagnostics unless Local LAN was explicitly chosen
+                ConnectionMode requestedMode = this.selectedConnectionMode;
+                NetworkDiagnosticsService.DiagnosticReport report = null;
+                ConnectionMode mode = requestedMode;
 
-                ConnectionMode mode = this.selectedConnectionMode;
+                if (requestedMode != ConnectionMode.LOCAL_LAN) {
+                    NetworkDiagnosticsService diag = NetworkDiagnosticsService.getInstance();
+                    report = diag.hasRecentReport()
+                            ? diag.getLastReport()
+                            : diag.runDiagnosticsAsync().get(12, TimeUnit.SECONDS);
 
-                if (mode != ConnectionMode.LOCAL_LAN
-                        && report.status() == NetworkDiagnosticsService.P2PCompatibilityStatus.NO_INTERNET) {
-                    this.lastErrorMessage = "No internet connection detected (use Local LAN).";
-                    this.starting = false;
-                    client.execute(() -> callback.accept(false));
+                    if (isHostAttemptCancelled(gen, server)) {
+                        rollbackHostAttempt(client, server, gen, false, false, false, false, callback);
+                        return;
+                    }
+
+                    syncSelectedModeWithDiagnostics(report);
+                    mode = this.selectedConnectionMode;
+
+                    if (mode != ConnectionMode.LOCAL_LAN
+                            && report.status() == NetworkDiagnosticsService.P2PCompatibilityStatus.NO_INTERNET) {
+                        this.lastErrorMessage = "No internet connection detected (use Local LAN).";
+                        rollbackHostAttempt(client, server, gen, false, false, false, false, callback);
+                        return;
+                    }
+                } else if (isHostAttemptCancelled(gen, server)) {
+                    rollbackHostAttempt(client, server, gen, false, false, false, false, callback);
                     return;
                 }
 
@@ -276,6 +298,10 @@ public class P2PNetworkManager {
                 CompletableFuture<Boolean> publishFuture = new CompletableFuture<>();
                 client.execute(() -> {
                     try {
+                        if (isHostAttemptCancelled(gen, server)) {
+                            publishFuture.complete(false);
+                            return;
+                        }
                         if (server.isPublished()) {
                             server.unpublishServer();
                         }
@@ -289,53 +315,75 @@ public class P2PNetworkManager {
 
                 boolean published = publishFuture.get(5, TimeUnit.SECONDS);
                 if (!published) {
-                    FabricP2PMod.LOGGER.warn("[P2P-26.3] Failed to publish integrated server on port {}", port);
-                    this.lastErrorMessage = "Failed to open local server port " + port;
-                    this.starting = false;
-                    client.execute(() -> callback.accept(false));
+                    if (!isHostAttemptCancelled(gen, server)) {
+                        FabricP2PMod.LOGGER.warn("[P2P-26.3] Failed to publish integrated server on port {}", port);
+                        this.lastErrorMessage = "Failed to open local server port " + port;
+                    }
+                    rollbackHostAttempt(client, server, gen, false, false, false, false, callback);
+                    return;
+                }
+                didPublish = true;
+
+                if (isHostAttemptCancelled(gen, server)) {
+                    rollbackHostAttempt(client, server, gen, true, false, false, false, callback);
                     return;
                 }
 
                 // 3. Activate the chosen connection mode
+                String candidateHost;
+                int candidatePort;
+                String candidateRoomCode;
+                ActiveHostingMode candidateMode;
+
                 if (mode == ConnectionMode.LOCAL_LAN) {
                     String localIp = UPnPService.getInstance().getLocalIp();
-                    this.hostedPublicHost = localIp;
-                    this.hostedPublicPort = port;
-                    this.hostedRoomCode = RoomCodeHelper.encodeRoomCode(localIp, port);
-                    this.activeHostingMode = ActiveHostingMode.LOCAL_LAN;
+                    candidateHost = localIp;
+                    candidatePort = port;
+                    candidateRoomCode = RoomCodeHelper.encodeRoomCode(localIp, port);
+                    candidateMode = ActiveHostingMode.LOCAL_LAN;
                 } else if (mode == ConnectionMode.UDP_HOLE_PUNCH) {
                     FabricP2PMod.LOGGER.info("[P2P-26.3] Starting Essential-style UDP Hole Punching Host -> 127.0.0.1:{}", port);
+                    didUdp = true;
                     UdpHolePunchService.HostStartResult udpRes =
                             UdpHolePunchService.getInstance().startHostAsync(port).get(10, TimeUnit.SECONDS);
 
                     if (!udpRes.success()) {
-                        this.lastErrorMessage = "UDP Hole Punch failed: " + udpRes.error();
-                        this.starting = false;
-                        client.execute(() -> {
-                            try {
-                                if (server.isPublished()) server.unpublishServer();
-                            } catch (Exception ignored) {}
-                            callback.accept(false);
-                        });
+                        if (!isHostAttemptCancelled(gen, server)) {
+                            this.lastErrorMessage = "UDP Hole Punch failed: " + udpRes.error();
+                        }
+                        rollbackHostAttempt(client, server, gen, didPublish, false, didUdp, false, callback);
                         return;
                     }
 
-                    this.hostedPublicHost = udpRes.publicIp();
-                    this.hostedPublicPort = udpRes.publicPort();
-                    this.hostedRoomCode = udpRes.roomCode();
-                    this.activeHostingMode = ActiveHostingMode.UDP_HOLE_PUNCH;
+                    candidateHost = udpRes.publicIp();
+                    candidatePort = udpRes.publicPort();
+                    candidateRoomCode = udpRes.roomCode();
+                    candidateMode = ActiveHostingMode.UDP_HOLE_PUNCH;
                 } else {
                     boolean useTunnel = (mode == ConnectionMode.TUNNEL_RELAY);
+                    candidateHost = null;
+                    candidatePort = port;
+                    candidateRoomCode = null;
+                    candidateMode = ActiveHostingMode.NONE;
+
                     if (!useTunnel) {
                         FabricP2PMod.LOGGER.info("[P2P-26.3] Attempting Direct P2P via UPnP IGD...");
+                        didUpnp = true;
                         boolean upnpOk = UPnPService.getInstance().openPort(port, "Minecraft P2P World (26.3)");
+                        if (isHostAttemptCancelled(gen, server)) {
+                            rollbackHostAttempt(client, server, gen, didPublish, didUpnp, false, false, callback);
+                            return;
+                        }
                         if (upnpOk) {
-                            String extIp = report.publicIp() != null ? report.publicIp() : UPnPService.getInstance().getExternalIp();
-                            this.hostedPublicHost = extIp;
-                            this.hostedPublicPort = port;
-                            this.hostedRoomCode = RoomCodeHelper.encodeRoomCode(extIp, port);
-                            this.activeHostingMode = ActiveHostingMode.DIRECT_UPNP;
+                            String extIp = (report != null && report.publicIp() != null)
+                                    ? report.publicIp()
+                                    : UPnPService.getInstance().getExternalIp();
+                            candidateHost = extIp;
+                            candidatePort = port;
+                            candidateRoomCode = RoomCodeHelper.encodeRoomCode(extIp, port);
+                            candidateMode = ActiveHostingMode.DIRECT_UPNP;
                         } else {
+                            didUpnp = false;
                             FabricP2PMod.LOGGER.warn("[P2P-26.3] UPnP mapping failed at runtime — switching to automatic Tunnel Fallback!");
                             useTunnel = true;
                         }
@@ -343,72 +391,151 @@ public class P2PNetworkManager {
 
                     if (useTunnel) {
                         FabricP2PMod.LOGGER.info("[P2P-26.3] Starting Tunnel Relay (bore.pub) -> 127.0.0.1:{}", port);
+                        didTunnel = true;
                         TunnelRelayService.TunnelStartResult tunnelRes =
                                 TunnelRelayService.getInstance().startTunnelAsync(port).get(10, TimeUnit.SECONDS);
 
                         if (!tunnelRes.success()) {
-                            this.lastErrorMessage = "Tunnel relay failed: " + tunnelRes.error();
-                            this.starting = false;
-                            client.execute(() -> {
-                                try {
-                                    if (server.isPublished()) server.unpublishServer();
-                                } catch (Exception ignored) {}
-                                callback.accept(false);
-                            });
+                            if (!isHostAttemptCancelled(gen, server)) {
+                                this.lastErrorMessage = "Tunnel relay failed: " + tunnelRes.error();
+                            }
+                            rollbackHostAttempt(client, server, gen, didPublish, didUpnp, false, didTunnel, callback);
                             return;
                         }
 
-                        this.hostedPublicHost = tunnelRes.remoteHost();
-                        this.hostedPublicPort = tunnelRes.remotePort();
-                        this.hostedRoomCode = RoomCodeHelper.encodeRoomCode(tunnelRes.remoteHost(), tunnelRes.remotePort());
-                        this.activeHostingMode = ActiveHostingMode.TUNNEL_RELAY;
+                        candidateHost = tunnelRes.remoteHost();
+                        candidatePort = tunnelRes.remotePort();
+                        candidateRoomCode = RoomCodeHelper.encodeRoomCode(tunnelRes.remoteHost(), tunnelRes.remotePort());
+                        candidateMode = ActiveHostingMode.TUNNEL_RELAY;
                     }
                 }
 
-                this.p2pActive = true;
-                this.starting = false;
+                boolean cancelledBeforeCommit = false;
+                synchronized (this) {
+                    if (isHostAttemptCancelled(gen, server)) {
+                        cancelledBeforeCommit = true;
+                    } else {
+                        this.hostedPublicHost = candidateHost;
+                        this.hostedPublicPort = candidatePort;
+                        this.hostedRoomCode = candidateRoomCode;
+                        this.activeHostingMode = candidateMode;
+                        this.p2pActive = true;
+                        this.starting = false;
+                    }
+                }
+
+                if (cancelledBeforeCommit) {
+                    rollbackHostAttempt(client, server, gen, didPublish, didUpnp, didUdp, didTunnel, callback);
+                    return;
+                }
 
                 // If Shared Cloud Worlds is enabled for this world, publish live lock & heartbeat
-                SharedWorldManager.getInstance().onP2PHostStarted(client, this.hostedRoomCode, this.activeHostingMode);
+                SharedWorldManager.getInstance().onP2PHostStarted(client, candidateRoomCode, candidateMode);
 
                 FabricP2PMod.LOGGER.info("[P2P-26.3] World hosted via {}! Room Code: {} -> {}:{}",
-                        activeHostingMode, hostedRoomCode, hostedPublicHost, hostedPublicPort);
+                        candidateMode, candidateRoomCode, candidateHost, candidatePort);
 
-                final String modeTag = switch (activeHostingMode) {
+                final String modeTag = switch (candidateMode) {
                     case UDP_HOLE_PUNCH -> "§b[UDP Hole Punch]";
                     case TUNNEL_RELAY -> "§d[Tunnel Relay]";
                     case LOCAL_LAN -> "§b[Local LAN]";
                     default -> "§a[Direct P2P]";
                 };
+                final String finalRoomCode = candidateRoomCode;
                 client.execute(() -> {
                     if (client.player != null) {
                         client.player.sendSystemMessage(Component.literal(
-                                "§b✦ [FabricP2P] " + modeTag + " §fWorld is live! Room Code: §b§l" + hostedRoomCode));
+                                "§b✦ [FabricP2P] " + modeTag + " §fWorld is live! Room Code: §b§l" + finalRoomCode));
                     }
                     callback.accept(true);
                 });
             } catch (Exception e) {
                 FabricP2PMod.LOGGER.error("[P2P-26.3] Error starting P2P host", e);
-                this.lastErrorMessage = e.getMessage();
-                this.starting = false;
-                client.execute(() -> callback.accept(false));
+                if (this.hostGeneration.get() == gen) {
+                    this.lastErrorMessage = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                }
+                rollbackHostAttempt(client, server, gen, didPublish, didUpnp, didUdp, didTunnel, callback);
             }
         });
+    }
+
+    private boolean isHostAttemptCancelled(long gen, IntegratedServer server) {
+        return this.hostGeneration.get() != gen || !server.isRunning();
+    }
+
+    private void rollbackHostAttempt(
+            Minecraft client,
+            IntegratedServer server,
+            long gen,
+            boolean didPublish,
+            boolean didUpnp,
+            boolean didUdp,
+            boolean didTunnel,
+            Consumer<Boolean> callback
+    ) {
+        boolean canCleanServices;
+        synchronized (this) {
+            if (this.hostGeneration.get() == gen) {
+                this.p2pActive = false;
+                this.starting = false;
+                this.activeHostingMode = ActiveHostingMode.NONE;
+                this.hostedPublicHost = null;
+                this.hostedPublicPort = -1;
+                this.hostedRoomCode = null;
+                canCleanServices = true;
+            } else {
+                canCleanServices = (!this.p2pActive && !this.starting);
+            }
+        }
+        if (canCleanServices) {
+            if (didUpnp) {
+                UPnPService.getInstance().closePortAsync();
+            }
+            if (didUdp) {
+                UdpHolePunchService.getInstance().stopHost();
+            }
+            if (didTunnel) {
+                TunnelRelayService.getInstance().stopTunnel();
+            }
+        }
+        client.execute(() -> {
+            if (didPublish && server.isRunning()
+                    && (this.hostGeneration.get() == gen || (!this.p2pActive && !this.starting))) {
+                try {
+                    if (server.isPublished()) {
+                        server.unpublishServer();
+                    }
+                    server.setUsesAuthentication(true);
+                } catch (Exception ignored) {}
+            }
+            callback.accept(false);
+        });
+    }
+
+    /**
+     * Prevents the next onWorldDisconnect() call from tearing down an active UDP client proxy
+     * (used when switching directly from singleplayer into a UDP Shared World).
+     */
+    public void suppressNextClientProxyDisconnectCleanup() {
+        this.suppressNextUdpClientStop.set(true);
     }
 
     /**
      * Unpublishes IntegratedServer, closes UPnP mappings and resets active P2P state.
      */
     public void stopP2PHost(Minecraft client) {
-        if (!p2pActive && !starting) return;
+        synchronized (this) {
+            if (!p2pActive && !starting) return;
+            this.hostGeneration.incrementAndGet();
+            this.p2pActive = false;
+            this.starting = false;
+            this.activeHostingMode = ActiveHostingMode.NONE;
+            this.hostedPublicHost = null;
+            this.hostedPublicPort = -1;
+            this.hostedRoomCode = null;
+        }
 
         FabricP2PMod.LOGGER.info("[P2P-26.3] Stopping P2P host and cleaning up UPnP/UDP/Tunnel...");
-        this.p2pActive = false;
-        this.starting = false;
-        this.activeHostingMode = ActiveHostingMode.NONE;
-        this.hostedPublicHost = null;
-        this.hostedPublicPort = -1;
-        this.hostedRoomCode = null;
 
         UPnPService.getInstance().closePortAsync();
         TunnelRelayService.getInstance().stopTunnel();
@@ -417,11 +544,18 @@ public class P2PNetworkManager {
 
         if (client != null) {
             IntegratedServer server = client.getSingleplayerServer();
-            if (server != null && server.isPublished()) {
+            if (server != null) {
+                if (server.isPublished()) {
+                    try {
+                        server.unpublishServer();
+                    } catch (Exception e) {
+                        FabricP2PMod.LOGGER.warn("[P2P-26.3] Failed to unpublish server cleanly: {}", e.getMessage());
+                    }
+                }
                 try {
-                    server.unpublishServer();
+                    server.setUsesAuthentication(true);
                 } catch (Exception e) {
-                    FabricP2PMod.LOGGER.warn("[P2P-26.3] Failed to unpublish server cleanly: {}", e.getMessage());
+                    FabricP2PMod.LOGGER.warn("[P2P-26.3] Failed to restore Mojang authentication flag: {}", e.getMessage());
                 }
             }
             if (client.player != null) {
@@ -434,16 +568,25 @@ public class P2PNetworkManager {
      * Called automatically when the player disconnects from a world so UPnP/Tunnel doesn't leak.
      */
     public void onWorldDisconnect() {
-        UdpHolePunchService.getInstance().stopClientProxy();
+        if (!suppressNextUdpClientStop.getAndSet(false)) {
+            UdpHolePunchService.getInstance().stopClientProxy();
+        }
         SharedWorldManager.getInstance().onP2PHostStopped(Minecraft.getInstance());
-        if (p2pActive || starting) {
+        boolean wasActiveOrStarting;
+        synchronized (this) {
+            this.hostGeneration.incrementAndGet();
+            wasActiveOrStarting = this.p2pActive || this.starting;
+            if (wasActiveOrStarting) {
+                this.p2pActive = false;
+                this.starting = false;
+                this.activeHostingMode = ActiveHostingMode.NONE;
+                this.hostedPublicHost = null;
+                this.hostedPublicPort = -1;
+                this.hostedRoomCode = null;
+            }
+        }
+        if (wasActiveOrStarting) {
             FabricP2PMod.LOGGER.info("[P2P-26.3] World disconnected — auto-cleaning UPnP, UDP & Tunnel.");
-            this.p2pActive = false;
-            this.starting = false;
-            this.activeHostingMode = ActiveHostingMode.NONE;
-            this.hostedPublicHost = null;
-            this.hostedPublicPort = -1;
-            this.hostedRoomCode = null;
             UPnPService.getInstance().closePortAsync();
             TunnelRelayService.getInstance().stopTunnel();
             UdpHolePunchService.getInstance().stopHost();
@@ -503,15 +646,35 @@ public class P2PNetworkManager {
                 if (players.has("max")) max = players.get("max").getAsInt();
             }
             if (root.has("description")) {
-                JsonElement desc = root.get("description");
-                if (desc.isJsonPrimitive()) {
-                    motd = desc.getAsString();
-                } else if (desc.isJsonObject() && desc.getAsJsonObject().has("text")) {
-                    motd = desc.getAsJsonObject().get("text").getAsString();
-                }
+                motd = extractComponentText(root.get("description"));
             }
         } catch (Exception ignored) {}
         return new PingResult(true, latency, "ONLINE", json, online, max, motd.trim());
+    }
+
+    private static String extractComponentText(JsonElement el) {
+        StringBuilder sb = new StringBuilder();
+        appendComponentText(el, sb, 0);
+        return sb.toString();
+    }
+
+    private static void appendComponentText(JsonElement el, StringBuilder sb, int depth) {
+        if (el == null || el.isJsonNull() || depth > 16) return;
+        if (el.isJsonPrimitive()) {
+            sb.append(el.getAsString());
+        } else if (el.isJsonArray()) {
+            for (JsonElement child : el.getAsJsonArray()) {
+                appendComponentText(child, sb, depth + 1);
+            }
+        } else if (el.isJsonObject()) {
+            JsonObject obj = el.getAsJsonObject();
+            if (obj.has("text") && obj.get("text").isJsonPrimitive()) {
+                sb.append(obj.get("text").getAsString());
+            }
+            if (obj.has("extra")) {
+                appendComponentText(obj.get("extra"), sb, depth + 1);
+            }
+        }
     }
 
     private byte[] createHandshakePacket(String host, int port) {
