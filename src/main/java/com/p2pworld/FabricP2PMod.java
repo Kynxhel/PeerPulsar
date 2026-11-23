@@ -133,39 +133,7 @@ public class FabricP2PMod implements ModInitializer {
 
                                             // Auto-share ONLY the current world's Drive subfolder (never the entire root folder),
                                             // and ONLY when the hosted world is actually a registered Shared World!
-                                            SharedWorldConfig cfg = SharedWorldConfig.getInstance();
-                                            SharedWorldManager sharedMgr = SharedWorldManager.getInstance();
-                                            if (cfg.isEnabled() && sharedMgr.isUsingGoogleDrive() && sharedMgr.isCurrentWorldShared(server)) {
-                                                // Don't re-share with ourselves
-                                                if (verified.email().equalsIgnoreCase(cfg.getGoogleUserEmail())) {
-                                                    return;
-                                                }
-                                                String rawWorldName = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize().getFileName().toString();
-                                                String worldName = SharedWorldManager.sanitizeName(rawWorldName);
-                                                if (worldName.isEmpty()) return;
-
-                                                CompletableFuture.runAsync(() -> {
-                                                    try {
-                                                        String worldFolderId = sharedMgr.resolveWorldDriveFolderId(worldName, false);
-                                                        if (worldFolderId == null || worldFolderId.isBlank()) {
-                                                            return;
-                                                        }
-                                                        boolean shared = GoogleDriveService.getInstance()
-                                                                .shareFolderWithEmail(worldFolderId, verified.email());
-                                                        if (shared && server.isRunning()) {
-                                                            server.execute(() -> {
-                                                                ServerPlayer target = server.getPlayerList().getPlayer(playerUuid);
-                                                                if (target != null && target == joiningPlayer) {
-                                                                    ServerPlayNetworking.send(target,
-                                                                            new P2PIdentityPayloads.SharedWorldGrantS2CPayload(worldFolderId, worldName));
-                                                                }
-                                                            });
-                                                        }
-                                                    } catch (Exception e) {
-                                                        LOGGER.warn("[SharedWorlds] Auto-share with {} failed: {}", verified.email(), e.getMessage());
-                                                    }
-                                                }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
-                                            }
+                                            shareCurrentWorldWithPlayer(server, joiningPlayer, verified.email());
                                         } finally {
                                             PlayerIdentityGuard.endVerificationAttempt(playerUuid, verifyToken);
                                         }
@@ -176,5 +144,67 @@ public class FabricP2PMod implements ModInitializer {
                             });
                 }
         );
+    }
+
+    /**
+     * Auto-shares the current hosted Shared World's Drive subfolder with all currently connected
+     * Google-verified players (e.g. when the host clicks Upload Current World after starting P2P).
+     */
+    public static void shareCurrentWorldWithConnectedPlayers(MinecraftServer server) {
+        if (server == null || !server.isRunning()) {
+            return;
+        }
+        server.execute(() -> {
+            if (!server.isRunning()) {
+                return;
+            }
+            for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                String email = PlayerIdentityGuard.getVerifiedEmail(player.getUUID());
+                if (email != null && !email.isBlank()) {
+                    shareCurrentWorldWithPlayer(server, player, email);
+                }
+            }
+        });
+    }
+
+    public static void shareCurrentWorldWithPlayer(MinecraftServer server, ServerPlayer targetPlayer, String email) {
+        if (server == null || targetPlayer == null || email == null || email.isBlank()) {
+            return;
+        }
+        SharedWorldConfig cfg = SharedWorldConfig.getInstance();
+        SharedWorldManager sharedMgr = SharedWorldManager.getInstance();
+        if (!cfg.isEnabled() || !sharedMgr.isUsingGoogleDrive() || !sharedMgr.isCurrentWorldShared(server)) {
+            return;
+        }
+        if (email.equalsIgnoreCase(cfg.getGoogleUserEmail())) {
+            return;
+        }
+        String rawWorldName = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize().getFileName().toString();
+        String worldName = SharedWorldManager.sanitizeName(rawWorldName);
+        if (worldName.isEmpty()) {
+            return;
+        }
+        UUID playerUuid = targetPlayer.getUUID();
+        CompletableFuture.runAsync(() -> {
+            try {
+                String worldFolderId = sharedMgr.resolveWorldDriveFolderId(worldName, false);
+                if (worldFolderId == null || worldFolderId.isBlank()) {
+                    return;
+                }
+                boolean shared = GoogleDriveService.getInstance()
+                        .shareFolderWithEmail(worldFolderId, email);
+                if (shared && server.isRunning()) {
+                    server.execute(() -> {
+                        ServerPlayer target = server.getPlayerList().getPlayer(playerUuid);
+                        if (target != null && target == targetPlayer) {
+                            ServerPlayNetworking.send(target,
+                                    new P2PIdentityPayloads.SharedWorldGrantS2CPayload(worldFolderId, worldName));
+                        }
+                    });
+                }
+            } catch (Exception e) {
+                LOGGER.warn("[SharedWorlds] Auto-share with {} failed: {}", email, e.getMessage());
+            }
+        }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
     }
 }

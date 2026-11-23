@@ -112,6 +112,10 @@ public class P2PNetworkManager {
         return this.p2pActive && this.hostGeneration.get() == gen;
     }
 
+    public long getHostGeneration() {
+        return this.hostGeneration.get();
+    }
+
     public boolean isStarting() {
         return starting;
     }

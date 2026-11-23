@@ -59,6 +59,7 @@ public final class PlayerIdentityGuard {
     private static final AtomicLong VERIFY_SEQ = new AtomicLong(0);
     private static final Map<UUID, Long> activeJoinToken = new ConcurrentHashMap<>();
     private static final Set<UUID> verifiedThisSession = ConcurrentHashMap.newKeySet();
+    private static final Map<UUID, String> verifiedSessionEmails = new ConcurrentHashMap<>();
     private static final Map<UUID, Long> verificationInFlight = new ConcurrentHashMap<>();
     private static final Map<UUID, AtomicInteger> verificationAttempts = new ConcurrentHashMap<>();
     private static final Map<UUID, PendingAnchor> pendingVerification = new ConcurrentHashMap<>();
@@ -82,6 +83,10 @@ public final class PlayerIdentityGuard {
      */
     public static boolean isPendingVerification(UUID uuid) {
         return uuid != null && pendingVerification.containsKey(uuid);
+    }
+
+    public static String getVerifiedEmail(UUID uuid) {
+        return uuid != null ? verifiedSessionEmails.get(uuid) : null;
     }
 
     /**
@@ -183,6 +188,7 @@ public final class PlayerIdentityGuard {
         if (server == null || player == null) return;
         UUID uuid = player.getUUID();
         verifiedThisSession.remove(uuid);
+        verifiedSessionEmails.remove(uuid);
         verificationInFlight.remove(uuid);
         verificationAttempts.remove(uuid);
         pendingVerification.remove(uuid);
@@ -314,6 +320,9 @@ public final class PlayerIdentityGuard {
             }
             pendingVerification.remove(uuid);
             verifiedThisSession.add(uuid);
+            if (verified != null && verified.email() != null && !verified.email().isBlank()) {
+                verifiedSessionEmails.put(uuid, verified.email());
+            }
             return true;
         }
 
@@ -324,6 +333,9 @@ public final class PlayerIdentityGuard {
             saveBindings(server, bindings);
             pendingVerification.remove(uuid);
             verifiedThisSession.add(uuid);
+            if (verified != null && verified.email() != null && !verified.email().isBlank()) {
+                verifiedSessionEmails.put(uuid, verified.email());
+            }
             FabricP2PMod.LOGGER.info("[IdentityGuard] Bound username '{}' to verified Google account.", username);
             player.sendSystemMessage(Component.literal(
                     "§a🔒 [FabricP2P] §fUsername §b" + username + " §fis now protected by your verified Google account!"
@@ -341,6 +353,7 @@ public final class PlayerIdentityGuard {
     public static void onPlayerDisconnect(UUID uuid) {
         if (uuid == null) return;
         verifiedThisSession.remove(uuid);
+        verifiedSessionEmails.remove(uuid);
         verificationInFlight.remove(uuid);
         verificationAttempts.remove(uuid);
         activeJoinToken.remove(uuid);
@@ -349,6 +362,7 @@ public final class PlayerIdentityGuard {
 
     public static void onServerStopped() {
         verifiedThisSession.clear();
+        verifiedSessionEmails.clear();
         verificationInFlight.clear();
         verificationAttempts.clear();
         activeJoinToken.clear();

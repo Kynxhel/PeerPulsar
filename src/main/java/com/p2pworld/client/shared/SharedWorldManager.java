@@ -164,6 +164,7 @@ public class SharedWorldManager {
                 GoogleDriveService drive = GoogleDriveService.getInstance();
                 String rootId = drive.getOrCreateRootFolderId();
                 Map<String, String> worldFolders = new LinkedHashMap<>();
+                Set<String> sharedWithMeNames = new HashSet<>();
 
                 for (GoogleDriveService.DriveItem folder : drive.listSubfolders(rootId)) {
                     String safeName = sanitizeName(folder.name());
@@ -177,6 +178,18 @@ public class SharedWorldManager {
                         worldFolders.putIfAbsent(safeName, linked.getValue());
                     }
                 }
+                try {
+                    for (GoogleDriveService.DriveItem sharedFolder : drive.listSharedWithMeFolders()) {
+                        String safeName = sanitizeName(sharedFolder.name());
+                        if (!safeName.isEmpty() && !safeName.equalsIgnoreCase(FILES_SUBDIR)) {
+                            if (worldFolders.putIfAbsent(safeName, sharedFolder.id()) == null) {
+                                sharedWithMeNames.add(safeName);
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    FabricP2PMod.LOGGER.debug("[SharedWorlds] Could not query sharedWithMe folders: {}", e.getMessage());
+                }
 
                 knownDriveWorldNames.addAll(worldFolders.keySet());
                 knownDriveWorldNames.retainAll(worldFolders.keySet());
@@ -189,6 +202,15 @@ public class SharedWorldManager {
                         String lockJson = drive.readTextFile(folderId, LOCK_FILE);
                         WorldMeta meta = parseJson(metaJson, WorldMeta.class);
                         SessionLock lock = parseJson(lockJson, SessionLock.class);
+
+                        if (sharedWithMeNames.contains(worldName)) {
+                            if (meta == null && lock == null) {
+                                continue;
+                            }
+                            if (cfg.getLinkedDriveFolderId(worldName) == null) {
+                                cfg.putLinkedDriveWorld(worldName, folderId);
+                            }
+                        }
 
                         int rev = (meta != null) ? meta.revision : 1;
                         String lastHost = (meta != null && meta.lastHost != null && !meta.lastHost.isBlank())
@@ -332,10 +354,24 @@ public class SharedWorldManager {
                     return new SyncOpResult(false, "Save failed before sync: " + errorMessage(saveErr));
                 }
                 try {
-                    if (useDrive) {
-                        return uploadIncrementalToGoogleDrive(worldDir, worldName, hostName, false);
+                    SyncOpResult result = useDrive
+                            ? uploadIncrementalToGoogleDrive(worldDir, worldName, hostName, false)
+                            : uploadIncrementalToLocalFolder(worldDir, worldName, hostName, false, null);
+                    if (result.success()) {
+                        P2PNetworkManager net = P2PNetworkManager.getInstance();
+                        if (net.isP2PActive() && this.activeHostedWorldName == null) {
+                            String roomCode = net.getHostedRoomCode();
+                            P2PNetworkManager.ActiveHostingMode mode = net.getActiveHostingMode();
+                            long hostGen = net.getHostGeneration();
+                            if (roomCode != null && mode != P2PNetworkManager.ActiveHostingMode.NONE) {
+                                onP2PHostStarted(mc, roomCode, mode, hostGen);
+                            }
+                        }
+                        if (useDrive && server.isRunning()) {
+                            FabricP2PMod.shareCurrentWorldWithConnectedPlayers(server);
+                        }
                     }
-                    return uploadIncrementalToLocalFolder(worldDir, worldName, hostName, false, null);
+                    return result;
                 } finally {
                     releaseSync.run();
                 }

@@ -119,6 +119,11 @@ public class GoogleDriveService {
         return queryFiles(q);
     }
 
+    public List<DriveItem> listSharedWithMeFolders() throws IOException {
+        String q = "sharedWithMe = true and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+        return queryFiles(q);
+    }
+
     public List<DriveItem> listFilesInFolder(String parentFolderId) throws IOException {
         String q = "'" + escapeQuery(parentFolderId) + "' in parents and trashed = false";
         return queryFiles(q);

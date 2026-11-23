@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.1.11+26.3
+- **Google Drive Auto-Share & Live Lock Fixes:** Automatically starts the live `session.lock.json` heartbeat and auto-shares the Google Drive world folder with all currently connected Google-verified players when clicking **Upload Current World** while P2P hosting is already active.
+- **Automatic `sharedWithMe` Discovery:** Added `GoogleDriveService.listSharedWithMeFolders()` so the **Shared Worlds** screen automatically discovers Drive world folders shared with the user even if they missed the in-game grant packet or cleared their local config.
+
 ## v2.1.10+26.3
 - **CI & OAuth Build Fixes:** Added GitHub Actions secret injection (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`) to `build.yml` on `main` pushes so CI artifacts include Google Sign-In credentials alongside Release builds, and prevented custom user-configured OAuth Client IDs in `GoogleAuthService` from inheriting the bundled default Client Secret.
 - **Shared Worlds Concurrency & UI Polish:** Scoped `SharedWorldManager` heartbeat/exit-sync sequence tracking per world so starting P2P hosting on a different world never cancels an in-flight exit-sync lock renewal or skips releasing the previous world's `session.lock.json`, locked `enableFeatureCard` during active sync/sign-in operations in `SharedWorldsScreen`, and updated the README installation version.
