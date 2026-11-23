@@ -5,11 +5,9 @@ import com.p2pworld.client.shared.SharedWorldConfig;
 import com.p2pworld.client.shared.SharedWorldManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.PauseScreen;
-import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.Component;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -20,18 +18,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(Minecraft.class)
 public abstract class MinecraftMixin {
-    @Shadow
-    public Screen screen;
-
     @Inject(method = "disconnectFromWorld", at = @At("HEAD"), cancellable = true)
     private void onDisconnectFromWorld(Component reason, CallbackInfo ci) {
         if (ExitSyncScreen.isBypassingDisconnectHook()) {
             return;
         }
-        if (!(this.screen instanceof PauseScreen)) {
+        Minecraft self = (Minecraft) (Object) this;
+        if (self.gui == null || !(self.gui.screen() instanceof PauseScreen)) {
             return;
         }
-        Minecraft self = (Minecraft) (Object) this;
         IntegratedServer server = self.getSingleplayerServer();
         if (!self.hasSingleplayerServer() || server == null || !server.isRunning()) {
             return;

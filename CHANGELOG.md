@@ -1,5 +1,8 @@
 # Changelog
 
+## v2.1.14+26.3
+- **Hotfix MC 26.3 `MinecraftMixin` Crash:** Replaced the removed `Minecraft.screen` `@Shadow` field with `Minecraft.gui.screen()` for Minecraft 26.3 compatibility.
+
 ## v2.1.13+26.3
 - **Sync-Before-Quit Screen (`ExitSyncScreen`):** Intercepted **Esc → Save and Quit to Title** via `MinecraftMixin` whenever playing a Shared Cloud World with **Auto-Sync on Exit** enabled — saves and incrementally uploads changed files to Google Drive / Sync Folder first with a live progress screen (plus Retry / Skip options if offline), then automatically exits to the Title Screen and releases the session lock without duplicate uploads.
 
