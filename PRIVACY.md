@@ -9,4 +9,4 @@
 - No personal data, accounts, Minecraft credentials, or world files are collected by the mod author.
 
 ## 2. Contact
-For questions or privacy inquiries, please open an issue on the [GitHub Repository](https://github.com/Kynxhel/Atarca/issues).
+For questions or privacy inquiries, please open an issue on the [GitHub Repository](https://github.com/Kynxhel/PeerPulsar/issues).
