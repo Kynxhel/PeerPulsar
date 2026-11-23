@@ -42,7 +42,7 @@ public class GoogleAuthService {
     private static final String TOKEN_URL = "https://oauth2.googleapis.com/token";
     private static final String USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo";
     private static final String TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo";
-    private static final String SCOPES = "https://www.googleapis.com/auth/drive.file openid email profile";
+    private static final String SCOPES = "https://www.googleapis.com/auth/drive openid email profile";
 
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(8))

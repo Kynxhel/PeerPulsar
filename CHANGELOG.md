@@ -1,5 +1,8 @@
 # Changelog
 
+## v2.1.12+26.3
+- **Fix Cross-User Google Drive Shared World Sync:** Upgraded the optional Google Drive OAuth scope from `drive.file` to `https://www.googleapis.com/auth/drive` so invited friends can read `meta.json`, `session.lock.json` (`● LIVE`), `manifest.json`, and world files inside shared world folders created by another player (resolving `"No manifest found on Google Drive"` for non-owner players), bounded `listSharedWithMeFolders()` to the 25 most recently modified shared folders, and updated `PRIVACY.md`.
+
 ## v2.1.11+26.3
 - **Google Drive Auto-Share & Live Lock Fixes:** Automatically starts the live `session.lock.json` heartbeat and auto-shares the Google Drive world folder with all currently connected Google-verified players when clicking **Upload Current World** while P2P hosting is already active.
 - **Automatic `sharedWithMe` Discovery:** Added `GoogleDriveService.listSharedWithMeFolders()` so the **Shared Worlds** screen automatically discovers Drive world folders shared with the user even if they missed the in-game grant packet or cleared their local config.

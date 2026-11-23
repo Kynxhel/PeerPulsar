@@ -121,7 +121,7 @@ public class GoogleDriveService {
 
     public List<DriveItem> listSharedWithMeFolders() throws IOException {
         String q = "sharedWithMe = true and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
-        return queryFiles(q);
+        return queryFiles(q, 25, false);
     }
 
     public List<DriveItem> listFilesInFolder(String parentFolderId) throws IOException {
@@ -544,13 +544,18 @@ public class GoogleDriveService {
     }
 
     private List<DriveItem> queryFiles(String query) throws IOException {
+        return queryFiles(query, 1000, true);
+    }
+
+    private List<DriveItem> queryFiles(String query, int pageSize, boolean paginate) throws IOException {
         List<DriveItem> list = new ArrayList<>();
         String pageToken = null;
 
         do {
             StringBuilder url = new StringBuilder(DRIVE_API)
                     .append("?q=").append(URLEncoder.encode(query, StandardCharsets.UTF_8))
-                    .append("&orderBy=modifiedTime%20desc&pageSize=1000&fields=nextPageToken,files(id,name)");
+                    .append("&orderBy=modifiedTime%20desc&pageSize=").append(pageSize)
+                    .append("&fields=nextPageToken,files(id,name)");
             if (pageToken != null && !pageToken.isBlank()) {
                 url.append("&pageToken=").append(URLEncoder.encode(pageToken, StandardCharsets.UTF_8));
             }
@@ -573,7 +578,7 @@ public class GoogleDriveService {
                     list.add(new DriveItem(f.get("id").getAsString(), f.get("name").getAsString()));
                 }
             }
-            pageToken = (root.has("nextPageToken") && !root.get("nextPageToken").isJsonNull())
+            pageToken = (paginate && root.has("nextPageToken") && !root.get("nextPageToken").isJsonNull())
                     ? root.get("nextPageToken").getAsString()
                     : null;
         } while (pageToken != null && !pageToken.isBlank());

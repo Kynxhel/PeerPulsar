@@ -6,8 +6,8 @@
 
 ## 1. Google Account & Google Drive Access (Optional Feature)
 The **Shared Cloud Worlds** feature is **disabled by default** and is strictly opt-in. If you choose to sign in with Google:
-- **Scopes Requested:** `https://www.googleapis.com/auth/drive.file`, `openid`, `email`, and `profile`.
-- **What we access:** Using the `drive.file` scope, the mod can **only** create and access files inside its own `FabricP2P_SharedWorlds` folder (or an individually shared world subfolder) in **your own** Google Drive. It cannot read, modify, or delete any other files in your Google Drive.
+- **Scopes Requested:** `https://www.googleapis.com/auth/drive`, `openid`, `email`, and `profile`.
+- **What we access:** The `drive` scope is required by Google Drive API v3 so invited friends can read and sync shared world folders created by another player. The mod only accesses its own `FabricP2P_SharedWorlds` folder and explicitly shared Fabric P2P world subfolders; it never reads, modifies, or deletes any unrelated personal files in your Google Drive.
 - **Identity Verification:** When joining a P2P world with Google Sign-In active, the mod sends your Google-signed OIDC `id_token` to the Host, which verifies it directly against `https://oauth2.googleapis.com/tokeninfo` and stores only a SHA-256 hash in the world's `fabricp2p_identities.json` (never plaintext emails).
 - **Token Storage:** Your OAuth access token, refresh token, ID token, and email address are stored **locally on your own computer** in `.minecraft/config/fabricp2p_shared_worlds.json`. They are never sent to the mod author or any third-party analytics server.
 - **Revoking Access:** You can click **Sign Out** inside the mod at any time to clear local tokens, or revoke access from your [Google Account Permissions](https://myaccount.google.com/permissions).
