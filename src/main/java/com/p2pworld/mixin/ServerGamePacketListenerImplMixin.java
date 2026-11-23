@@ -15,13 +15,16 @@ import net.minecraft.network.protocol.game.ServerboundJigsawGeneratePacket;
 import net.minecraft.network.protocol.game.ServerboundLockDifficultyPacket;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.network.protocol.game.ServerboundMoveVehiclePacket;
+import net.minecraft.network.protocol.game.ServerboundPaddleBoatPacket;
 import net.minecraft.network.protocol.game.ServerboundPickItemFromBlockPacket;
 import net.minecraft.network.protocol.game.ServerboundPickItemFromEntityPacket;
 import net.minecraft.network.protocol.game.ServerboundPlaceRecipePacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerAbilitiesPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
 import net.minecraft.network.protocol.game.ServerboundRenameItemPacket;
+import net.minecraft.network.protocol.game.ServerboundSelectBundleItemPacket;
 import net.minecraft.network.protocol.game.ServerboundSelectTradePacket;
 import net.minecraft.network.protocol.game.ServerboundSetBeaconPacket;
 import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
@@ -299,6 +302,27 @@ public abstract class ServerGamePacketListenerImplMixin {
 
     @Inject(method = "handleTeleportToEntityPacket", at = @At("HEAD"), cancellable = true)
     private void onHandleTeleportToEntityPacket(ServerboundTeleportToEntityPacket packet, CallbackInfo ci) {
+        if (fabricp2p$isPending()) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handlePlayerInput", at = @At("HEAD"), cancellable = true)
+    private void onHandlePlayerInput(ServerboundPlayerInputPacket packet, CallbackInfo ci) {
+        if (fabricp2p$isPending()) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handlePaddleBoat", at = @At("HEAD"), cancellable = true)
+    private void onHandlePaddleBoat(ServerboundPaddleBoatPacket packet, CallbackInfo ci) {
+        if (fabricp2p$isPending()) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handleBundleItemSelectedPacket", at = @At("HEAD"), cancellable = true)
+    private void onHandleBundleItemSelectedPacket(ServerboundSelectBundleItemPacket packet, CallbackInfo ci) {
         if (fabricp2p$isPending()) {
             ci.cancel();
         }

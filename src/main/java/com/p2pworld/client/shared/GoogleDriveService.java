@@ -267,7 +267,7 @@ public class GoogleDriveService {
                     .POST(HttpRequest.BodyPublishers.ofString(meta.toString(), StandardCharsets.UTF_8))
                     .build();
         });
-        if (initResp.statusCode() == 404 && existingFileId != null) {
+        if (initResp.statusCode() == 404 && existingFileId != null && !existingFileId.isBlank()) {
             return uploadResumable(parentFolderId, null, fileName, mimeType, localFile);
         }
         if (initResp.statusCode() < 200 || initResp.statusCode() >= 300) {

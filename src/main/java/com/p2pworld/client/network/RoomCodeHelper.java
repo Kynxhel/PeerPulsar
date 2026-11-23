@@ -165,6 +165,9 @@ public class RoomCodeHelper {
                 String str = new String(decoded, StandardCharsets.UTF_8);
                 return parseDirectHostPort(str);
             } catch (Exception ignored) {}
+
+            // Never fall through and treat an invalid "P2P-..." code as a raw DNS hostname
+            return null;
         }
 
         return parseDirectHostPort(raw);

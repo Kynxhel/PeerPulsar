@@ -264,6 +264,7 @@ public class P2PNetworkManager {
 
         IntegratedServer server = client.getSingleplayerServer();
         if (server == null) {
+            this.lastErrorMessage = "No singleplayer server running to host.";
             FabricP2PMod.LOGGER.error("[P2P] No singleplayer server running to host!");
             callback.accept(false);
             return;
@@ -509,6 +510,7 @@ public class P2PNetworkManager {
             Consumer<Boolean> callback
     ) {
         final boolean ownedAttempt;
+        final boolean cleanupLeakedServices;
         final long rollbackGen;
         synchronized (this) {
             if (this.hostGeneration.get() == gen) {
@@ -520,12 +522,16 @@ public class P2PNetworkManager {
                 this.hostedPublicPort = -1;
                 this.hostedRoomCode = null;
                 ownedAttempt = true;
+                cleanupLeakedServices = true;
             } else {
                 rollbackGen = -1L;
                 ownedAttempt = false;
+                // If stopP2PHost/onWorldDisconnect ran while this attempt was starting services
+                // and no newer host attempt is active/starting, still tear down the newly started services.
+                cleanupLeakedServices = !this.p2pActive && !this.starting;
             }
         }
-        if (ownedAttempt) {
+        if (cleanupLeakedServices) {
             if (didUpnp) {
                 UPnPService.getInstance().closePortAsync();
             }

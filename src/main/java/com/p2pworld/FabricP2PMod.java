@@ -135,7 +135,7 @@ public class FabricP2PMod implements ModInitializer {
                                             // and ONLY when the hosted world is actually a registered Shared World!
                                             SharedWorldConfig cfg = SharedWorldConfig.getInstance();
                                             SharedWorldManager sharedMgr = SharedWorldManager.getInstance();
-                                            if (cfg.isEnabled() && cfg.isGoogleSignedIn() && sharedMgr.isCurrentWorldShared(server)) {
+                                            if (cfg.isEnabled() && sharedMgr.isUsingGoogleDrive() && sharedMgr.isCurrentWorldShared(server)) {
                                                 // Don't re-share with ourselves
                                                 if (verified.email().equalsIgnoreCase(cfg.getGoogleUserEmail())) {
                                                     return;

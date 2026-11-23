@@ -581,6 +581,9 @@ public class SharedWorldManager {
             if (failed > 0) {
                 return new SyncOpResult(false, "Incomplete pull: " + failed + " file(s) failed to download or failed SHA-256 verification.");
             }
+            if (expectedFiles.isEmpty()) {
+                return new SyncOpResult(false, "Manifest contains no valid world files; aborting pull.");
+            }
 
             Files.createDirectories(normalizedRoot);
             for (Map.Entry<Path, Path> move : stagedMoves) {
@@ -765,6 +768,9 @@ public class SharedWorldManager {
                     return new SyncOpResult(false, "Incomplete pull: " + missing + " file(s) missing in sync folder.");
                 }
                 return new SyncOpResult(false, "Incomplete pull: " + missing + " missing, " + failed + " failed SHA-256 verification.");
+            }
+            if (expectedFiles.isEmpty()) {
+                return new SyncOpResult(false, "Manifest contains no valid world files; aborting pull.");
             }
 
             Files.createDirectories(normalizedRoot);

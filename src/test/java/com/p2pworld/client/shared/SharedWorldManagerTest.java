@@ -167,4 +167,33 @@ class SharedWorldManagerTest {
         assertTrue(result.message().contains("missing"), "Error message should mention missing files: " + result.message());
         assertTrue(Files.exists(preExistingExtra), "Incomplete pull must not prune existing local files");
     }
+
+    @Test
+    void localPullRejectsManifestWithOnlyFilteredEntriesWithoutPruning(@TempDir Path tempDir) throws Exception {
+        Path syncRoot = tempDir.resolve("sync");
+        Path sharedWorldDir = syncRoot.resolve("FilteredManifestWorld");
+        Files.createDirectories(sharedWorldDir.resolve("files"));
+        Files.writeString(sharedWorldDir.resolve("manifest.json"), """
+                {
+                  "revision": 5,
+                  "lastHost": "Alice",
+                  "updatedAtMs": 1700000000000,
+                  "files": {
+                    "session.lock": { "sha256": "aaa", "size": 1 },
+                    "../escape.dat": { "sha256": "bbb", "size": 2 }
+                  }
+                }
+                """, StandardCharsets.UTF_8);
+
+        Path targetWorldDir = tempDir.resolve("saves").resolve("FilteredManifestWorld");
+        Files.createDirectories(targetWorldDir);
+        Path levelDat = targetWorldDir.resolve("level.dat");
+        Files.writeString(levelDat, "keep-world-safe", StandardCharsets.UTF_8);
+
+        SharedWorldManager.SyncOpResult result = SharedWorldManager.getInstance()
+                .pullIncrementalFromLocalFolder(syncRoot.toString(), "FilteredManifestWorld", targetWorldDir);
+
+        assertFalse(result.success(), "Manifest with zero valid world files must be rejected");
+        assertTrue(Files.exists(levelDat), "Rejected manifest must not prune existing local world files");
+    }
 }

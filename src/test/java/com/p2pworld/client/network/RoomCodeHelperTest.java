@@ -221,4 +221,20 @@ class RoomCodeHelperTest {
         assertTrue(decoded.isUdpHolePunch());
         assertEquals(udpCode, decoded.host());
     }
+
+    @Test
+    void invalidP2PPrefixedCodesNeverFallThroughAsHostnames() {
+        // Length 4n+1 payloads cause Base64.getUrlDecoder().decode() to throw IllegalArgumentException;
+        // they must return null rather than falling through to parseDirectHostPort().
+        assertNull(RoomCodeHelper.decodeRoomCode("P2P-ABCD1"));
+        assertNull(RoomCodeHelper.decodeRoomCode("P2P-world1234"));
+
+        String realCode = RoomCodeHelper.encodeRoomCode("bore.pub", 41234);
+        String msg = "Join my P2P-world1234 server using " + realCode;
+        assertEquals(realCode, RoomCodeHelper.extractCleanCode(msg));
+        RoomCodeHelper.ConnectionTarget target = RoomCodeHelper.decodeRoomCode(msg);
+        assertNotNull(target);
+        assertEquals("bore.pub", target.host());
+        assertEquals(41234, target.port());
+    }
 }
