@@ -75,6 +75,7 @@ public class SharedWorldManager {
     private volatile String activeModeName = null;
     private volatile ScheduledExecutorService heartbeatExec = null;
     private final Set<String> knownDriveWorldNames = ConcurrentHashMap.newKeySet();
+    private final Set<String> activeExitSyncSessions = ConcurrentHashMap.newKeySet();
 
     private SharedWorldManager() {}
 
@@ -130,6 +131,9 @@ public class SharedWorldManager {
      */
     public String resolveWorldDriveFolderId(String worldName, boolean createIfMissing) throws IOException {
         String safeName = sanitizeName(worldName);
+        if (safeName.isEmpty()) {
+            return null;
+        }
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
         GoogleDriveService drive = GoogleDriveService.getInstance();
         String rootId = drive.getOrCreateRootFolderId();
@@ -831,15 +835,7 @@ public class SharedWorldManager {
             }
             SessionLock existingLock = readJson(sharedDir.resolve(LOCK_FILE), SessionLock.class);
             if (isLockFresh(existingLock)) {
-                String activeHost = resolveLockHostName(existingLock);
-                FabricP2PMod.LOGGER.warn("[SharedWorlds] World '{}' is already locked by '{}'; skipping live lock & exit auto-sync.", worldName, activeHost);
-                mc.execute(() -> {
-                    if (mc.player != null) {
-                        mc.player.sendSystemMessage(Component.literal(
-                                "§e⚠ [SharedWorlds] §f'" + worldName + "' is currently hosted by §b" + activeHost
-                                        + "§f — live lock & auto-sync skipped to prevent conflict."));
-                    }
-                });
+                notifyHostLockConflict(mc, worldName, existingLock, false);
                 return;
             }
         } else {
@@ -866,15 +862,7 @@ public class SharedWorldManager {
                     String lockJson = GoogleDriveService.getInstance().readTextFile(worldFolderId, LOCK_FILE);
                     SessionLock existingLock = parseJson(lockJson, SessionLock.class);
                     if (isLockFresh(existingLock)) {
-                        String activeHost = resolveLockHostName(existingLock);
-                        FabricP2PMod.LOGGER.warn("[SharedWorlds] Drive world '{}' is already locked by '{}'; skipping live lock & exit auto-sync.", worldName, activeHost);
-                        mc.execute(() -> {
-                            if (mc.player != null) {
-                                mc.player.sendSystemMessage(Component.literal(
-                                        "§e⚠ [SharedWorlds] §f'" + worldName + "' is currently hosted by §b" + activeHost
-                                                + "§f — live lock & auto-sync skipped to prevent conflict."));
-                            }
-                        });
+                        notifyHostLockConflict(mc, worldName, existingLock, true);
                         return;
                     }
                 }
@@ -985,6 +973,9 @@ public class SharedWorldManager {
         }
 
         // Use a non-daemon worker thread so closing Minecraft right after disconnecting still completes sync & lock release
+        if (sessionId != null && !sessionId.isBlank()) {
+            activeExitSyncSessions.add(sessionId);
+        }
         Thread exitSyncThread = new Thread(() -> {
             ScheduledExecutorService exitLockRenewer = null;
             try {
@@ -1051,10 +1042,44 @@ public class SharedWorldManager {
                         writeSessionLock(syncRoot.resolve(worldName), false, hostName, "", "", worldName, sessionId);
                     }
                 }
+                if (sessionId != null) {
+                    activeExitSyncSessions.remove(sessionId);
+                }
             }
         }, "FabricP2P-SharedWorld-ExitSync");
         exitSyncThread.setDaemon(false);
         exitSyncThread.start();
+    }
+
+    private void notifyHostLockConflict(Minecraft mc, String worldName, SessionLock existingLock, boolean isDrive) {
+        boolean isOwnExitSync = existingLock != null
+                && existingLock.sessionId != null
+                && activeExitSyncSessions.contains(existingLock.sessionId);
+        String activeHost = resolveLockHostName(existingLock);
+        boolean isSyncingLock = existingLock != null
+                && (existingLock.roomCode == null || existingLock.roomCode.isBlank());
+        String label = isDrive ? "Drive world" : "World";
+        if (isOwnExitSync) {
+            FabricP2PMod.LOGGER.warn("[SharedWorlds] {} '{}' still has an in-flight exit sync; skipping live lock & exit auto-sync.", label, worldName);
+            mc.execute(() -> {
+                if (mc.player != null) {
+                    mc.player.sendSystemMessage(Component.literal(
+                            "§e⏳ [SharedWorlds] §fPrevious exit sync for '" + worldName
+                                    + "' is still finishing — live lock & auto-sync skipped to prevent conflict."));
+                }
+            });
+            return;
+        }
+        String action = isSyncingLock ? "currently syncing by " : "currently hosted by ";
+        FabricP2PMod.LOGGER.warn("[SharedWorlds] {} '{}' is already locked ({}{}); skipping live lock & exit auto-sync.",
+                label, worldName, action, activeHost);
+        mc.execute(() -> {
+            if (mc.player != null) {
+                mc.player.sendSystemMessage(Component.literal(
+                        "§e⚠ [SharedWorlds] §f'" + worldName + "' is " + action + "§b" + activeHost
+                                + "§f — live lock & auto-sync skipped to prevent conflict."));
+            }
+        });
     }
 
     private void writeDriveSessionLock(String worldName, boolean active, String hostName, String roomCode, String mode, String sessionId) {

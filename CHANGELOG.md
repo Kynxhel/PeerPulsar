@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.1.9+26.3
+- **Shared Worlds & Google Auth Fixes:** Tracked in-flight exit-sync session IDs in `SharedWorldManager` so restarting P2P host while a previous exit sync is still finishing reports a clear exit-sync conflict message instead of falsely attributing the lock to another live host, guarded `resolveWorldDriveFolderId` against empty sanitized world names, and unwrapped `ExecutionException` in `GoogleAuthService.signInAsync` so browser OAuth cancellation errors display clean messages without raw `java.io.IOException:` prefixes.
+- **UDP Hole Punching Reliability:** Checked HTTP status codes in `UdpHolePunchService.publishSignal` so `ntfy.sh` rate-limit (`429`) or server (`5xx`) errors fail fast with a clear diagnostic instead of timing out silently, and closed the ephemeral local TCP `ServerSocket` immediately after accepting the single Minecraft client connection.
+
 ## v2.1.8+26.3
 - **Networking & Room Code Fixes:** Fixed `P2PNetworkManager.rollbackHostAttempt` to tear down UPnP/UDP/Tunnel services started concurrently after `stopP2PHost()` or `onWorldDisconnect()` when no newer host attempt is active, set `lastErrorMessage` when no singleplayer server is running, and fixed `RoomCodeHelper.decodeSingleToken` so malformed `P2P-...` codes (e.g. `4n+1` Base64 lengths) never fall through as raw DNS hostnames.
 - **Shared Worlds & Google Drive Safety:** Guarded `FabricP2PMod` auto-sharing with `SharedWorldManager.isUsingGoogleDrive()` so Local Sync Folder mode never triggers unnecessary Google Drive API calls, rejected manifests whose entries are all filtered out (`expectedFiles.isEmpty()`) before pruning local world files, and checked `!existingFileId.isBlank()` before retrying `404` in `GoogleDriveService.uploadResumable`.

@@ -289,9 +289,12 @@ public class GoogleAuthService {
                     FabricP2PMod.LOGGER.warn("[GoogleAuth] Sign-in timed out waiting for browser callback.");
                     return new AuthResult(false, null, "Sign-in timed out after 120s. Please try again.");
                 } catch (Exception e) {
-                    String msg = (e.getMessage() != null && !e.getMessage().isBlank())
-                            ? e.getMessage()
-                            : e.getClass().getSimpleName();
+                    Throwable cause = (e instanceof java.util.concurrent.ExecutionException && e.getCause() != null)
+                            ? e.getCause()
+                            : e;
+                    String msg = (cause.getMessage() != null && !cause.getMessage().isBlank())
+                            ? cause.getMessage()
+                            : cause.getClass().getSimpleName();
                     FabricP2PMod.LOGGER.error("[GoogleAuth] Sign-in failed: {}", msg);
                     return new AuthResult(false, null, msg);
                 } finally {

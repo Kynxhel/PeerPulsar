@@ -705,6 +705,7 @@ public class UdpHolePunchService {
                         try {
                             boundLocalServer.setSoTimeout(15_000);
                             Socket mcSock = boundLocalServer.accept();
+                            try { boundLocalServer.close(); } catch (Exception ignored) {}
                             mcSock.setTcpNoDelay(true);
                             session.attachTcpSocket(mcSock);
                         } catch (SocketTimeoutException e) {
@@ -1269,7 +1270,11 @@ public class UdpHolePunchService {
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(body.getBytes(StandardCharsets.UTF_8));
             }
-            conn.getResponseCode();
+            int status = conn.getResponseCode();
+            if (status < 200 || status >= 300) {
+                FabricP2PMod.LOGGER.warn("[P2P-UDP] Signaling publish to {} returned HTTP {}", topic, status);
+                throw new IOException("Signaling server returned HTTP " + status);
+            }
         } finally {
             conn.disconnect();
         }
