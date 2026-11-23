@@ -14,8 +14,7 @@ public abstract class ServerLoginPacketListenerImplMixin {
     @Shadow @Final MinecraftServer server;
 
     /**
-     * Bypasses Mojang online authentication check during client login in Minecraft 26.3
-     * when Crack Support is enabled. This allows offline/crack players to join without session verification.
+     * Applies Offline LAN Auth mode during client login when enabled on the P2P Host screen.
      */
     @Redirect(
             method = "handleHello",
@@ -27,10 +26,9 @@ public abstract class ServerLoginPacketListenerImplMixin {
     )
     private boolean redirectUsesAuthentication(MinecraftServer serverInstance) {
         P2PNetworkManager manager = P2PNetworkManager.getInstance();
-        if (manager.isP2PActive() && manager.isCrackSupportEnabled()) {
-            return false; // Force offline authentication path
+        if (manager.isP2PActive() && manager.isOfflineModeEnabled()) {
+            return false;
         }
         return serverInstance.usesAuthentication();
     }
 }
-

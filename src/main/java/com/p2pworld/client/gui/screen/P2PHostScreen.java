@@ -111,14 +111,14 @@ public class P2PHostScreen extends Screen {
         this.offlineAuthCard = new NeonToggleCard(
                 panelLeft, gridTop, cardW, cardH,
                 tr("screen.fabricp2p.host.card_offline_title"),
-                () -> networkManager.isCrackSupportEnabled()
+                () -> networkManager.isOfflineModeEnabled()
                         ? tr("screen.fabricp2p.host.card_offline_on")
                         : tr("screen.fabricp2p.host.card_offline_off"),
-                networkManager::isCrackSupportEnabled,
-                () -> networkManager.isCrackSupportEnabled() ? NeonTheme.EMERALD : NeonTheme.CRIMSON,
+                networkManager::isOfflineModeEnabled,
+                () -> networkManager.isOfflineModeEnabled() ? NeonTheme.EMERALD : NeonTheme.CRIMSON,
                 () -> {
-                    boolean next = !networkManager.isCrackSupportEnabled();
-                    networkManager.setCrackSupportEnabled(next);
+                    boolean next = !networkManager.isOfflineModeEnabled();
+                    networkManager.setOfflineModeEnabled(next);
                     particleBg.spawnBurst(offlineAuthCard.getX() + cardW - 20, offlineAuthCard.getY() + cardH / 2,
                             next ? NeonTheme.EMERALD : NeonTheme.CRIMSON, 14);
                 }
@@ -296,7 +296,7 @@ public class P2PHostScreen extends Screen {
                                 networkManager.getHostedRoomCode(),
                                 networkManager.getHostedPublicHost(),
                                 networkManager.getHostedPublicPort(),
-                                networkManager.isCrackSupportEnabled(),
+                                networkManager.isOfflineModeEnabled(),
                                 networkManager.getSelectedGameType().getName()
                         );
                         this.minecraft.keyboardHandler.setClipboard(discordMsg);
@@ -406,7 +406,7 @@ public class P2PHostScreen extends Screen {
                 networkManager.getSelectedGameType(),
                 networkManager.isAllowCheats(),
                 port,
-                networkManager.isCrackSupportEnabled(),
+                networkManager.isOfflineModeEnabled(),
                 success -> {
                     updateWidgetStates();
                     if (success) {

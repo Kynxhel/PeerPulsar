@@ -3,8 +3,9 @@
 build/
 out/
 
-# Local OAuth secrets (never committed to public GitHub)
+# Local OAuth secrets & draft listing notes (never committed to public GitHub)
 local.properties
+MODRINTH_CURSEFORGE.md
 
 # Minecraft run directory
 run/

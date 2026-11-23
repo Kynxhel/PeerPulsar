@@ -44,7 +44,7 @@ public class P2PNetworkManager {
 
     private volatile boolean p2pActive = false;
     private volatile boolean starting = false;
-    private volatile boolean crackSupportEnabled = true;
+    private volatile boolean offlineModeEnabled = true;
     private volatile int hostedPort = 25565;
     private volatile String hostedPublicHost = null;
     private volatile int hostedPublicPort = -1;
@@ -74,12 +74,12 @@ public class P2PNetworkManager {
         return starting;
     }
 
-    public boolean isCrackSupportEnabled() {
-        return crackSupportEnabled;
+    public boolean isOfflineModeEnabled() {
+        return offlineModeEnabled;
     }
 
-    public void setCrackSupportEnabled(boolean crackSupportEnabled) {
-        this.crackSupportEnabled = crackSupportEnabled;
+    public void setOfflineModeEnabled(boolean offlineModeEnabled) {
+        this.offlineModeEnabled = offlineModeEnabled;
     }
 
     public int getHostedPort() {
@@ -201,11 +201,11 @@ public class P2PNetworkManager {
     /**
      * Starts the IntegratedServer as a P2P hosted world, triggers UPnP and computes room code.
      */
-    public void startP2PHost(Minecraft client, GameType gameType, boolean cheats, int port, boolean crackSupport, Consumer<Boolean> callback) {
+    public void startP2PHost(Minecraft client, GameType gameType, boolean cheats, int port, boolean offlineMode, Consumer<Boolean> callback) {
         this.selectedGameType = gameType;
         this.allowCheats = cheats;
         this.hostedPort = port;
-        this.crackSupportEnabled = crackSupport;
+        this.offlineModeEnabled = offlineMode;
 
         IntegratedServer server = client.getSingleplayerServer();
         if (server == null) {
@@ -236,8 +236,8 @@ public class P2PNetworkManager {
                     return;
                 }
 
-                FabricP2PMod.LOGGER.info("[P2P-26.3] Publishing integrated server on local port {} (Crack: {}, GameMode: {}, NetMode: {})...",
-                        port, crackSupport, gameType, mode);
+                FabricP2PMod.LOGGER.info("[P2P-26.3] Publishing integrated server on local port {} (OfflineLAN: {}, GameMode: {}, NetMode: {})...",
+                        port, offlineMode, gameType, mode);
 
                 // 2. Publish IntegratedServer on client thread and wait for result
                 CompletableFuture<Boolean> publishFuture = new CompletableFuture<>();

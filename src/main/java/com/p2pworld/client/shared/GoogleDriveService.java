@@ -93,6 +93,89 @@ public class GoogleDriveService {
         uploadBytes(parentFolderId, fileName, mimeType, bytes);
     }
 
+    /**
+     * Uploads or updates a file and returns its Google Drive file ID for fast incremental sync.
+     */
+    public String uploadOrUpdateFileById(String parentFolderId, String existingFileId, String fileName, String mimeType, Path localFile) throws IOException {
+        String token = GoogleAuthService.getInstance().getValidAccessToken();
+        byte[] data = Files.readAllBytes(localFile);
+
+        if (existingFileId != null && !existingFileId.isBlank()) {
+            HttpURLConnection conn = (HttpURLConnection) URI.create(DRIVE_UPLOAD_API + "/" + existingFileId + "?uploadType=media").toURL().openConnection();
+            conn.setRequestMethod("PATCH");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+            conn.setRequestProperty("Content-Type", mimeType);
+            conn.setConnectTimeout(8000);
+            conn.setReadTimeout(60000);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(data);
+            }
+            if (conn.getResponseCode() < 400) {
+                return existingFileId;
+            }
+        }
+
+        // Create new file via multipart upload and return its assigned ID
+        String boundary = "FabricP2PBoundary" + System.currentTimeMillis();
+        JsonObject meta = new JsonObject();
+        meta.addProperty("name", fileName);
+        JsonArray parents = new JsonArray();
+        parents.add(parentFolderId);
+        meta.add("parents", parents);
+
+        HttpURLConnection conn = (HttpURLConnection) URI.create(DRIVE_UPLOAD_API + "?uploadType=multipart&fields=id").toURL().openConnection();
+        conn.setRequestMethod("POST");
+        conn.setDoOutput(true);
+        conn.setRequestProperty("Authorization", "Bearer " + token);
+        conn.setRequestProperty("Content-Type", "multipart/related; boundary=" + boundary);
+        conn.setConnectTimeout(8000);
+        conn.setReadTimeout(60000);
+
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(("--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            os.write(meta.toString().getBytes(StandardCharsets.UTF_8));
+            os.write(("\r\n--" + boundary + "\r\nContent-Type: " + mimeType + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            os.write(data);
+            os.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        }
+
+        if (conn.getResponseCode() >= 400) {
+            throw new IOException("Drive file upload failed (" + conn.getResponseCode() + ")");
+        }
+        String resp = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        return JsonParser.parseString(resp).getAsJsonObject().get("id").getAsString();
+    }
+
+    public boolean downloadFileById(String fileId, Path destFile) throws IOException {
+        if (fileId == null || fileId.isBlank()) return false;
+        String token = GoogleAuthService.getInstance().getValidAccessToken();
+        HttpURLConnection conn = (HttpURLConnection) URI.create(DRIVE_API + "/" + fileId + "?alt=media").toURL().openConnection();
+        conn.setRequestProperty("Authorization", "Bearer " + token);
+        conn.setConnectTimeout(8000);
+        conn.setReadTimeout(60000);
+        if (conn.getResponseCode() != 200) return false;
+
+        Files.createDirectories(destFile.getParent());
+        try (InputStream in = conn.getInputStream(); OutputStream out = Files.newOutputStream(destFile)) {
+            in.transferTo(out);
+        }
+        return true;
+    }
+
+    public void deleteFileById(String fileId) {
+        if (fileId == null || fileId.isBlank()) return;
+        try {
+            String token = GoogleAuthService.getInstance().getValidAccessToken();
+            HttpURLConnection conn = (HttpURLConnection) URI.create(DRIVE_API + "/" + fileId).toURL().openConnection();
+            conn.setRequestMethod("DELETE");
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            conn.getResponseCode();
+        } catch (Exception ignored) {}
+    }
+
     public boolean downloadFile(String parentFolderId, String fileName, Path destFile) throws IOException {
         String token = GoogleAuthService.getInstance().getValidAccessToken();
         String fileId = findFileId(token, fileName, parentFolderId);

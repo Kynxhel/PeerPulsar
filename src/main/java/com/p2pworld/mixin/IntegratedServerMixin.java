@@ -12,23 +12,22 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(IntegratedServer.class)
 public abstract class IntegratedServerMixin {
     /**
-     * Intercepts publishServer on Minecraft 26.3 to enforce usesAuthentication = false when Crack Support is enabled.
+     * Intercepts publishServer on Minecraft 26.3 to apply Offline LAN Auth mode when enabled.
      */
     @Inject(method = "publishServer(Lnet/minecraft/server/MinecraftServer$MultiplayerScope;ZI)Z", at = @At("HEAD"))
     private void onPublishServerHead(MinecraftServer.MultiplayerScope scope, boolean cheatsAllowed, int port, CallbackInfoReturnable<Boolean> cir) {
         P2PNetworkManager manager = P2PNetworkManager.getInstance();
-        if (manager.isCrackSupportEnabled()) {
+        if (manager.isOfflineModeEnabled()) {
             ((MinecraftServer) (Object) this).setUsesAuthentication(false);
-            FabricP2PMod.LOGGER.info("[P2P-Crack 26.3] Enforcing usesAuthentication = FALSE for IntegratedServer (Port: {}).", port);
+            FabricP2PMod.LOGGER.info("[P2P-OfflineLAN 26.3] Setting usesAuthentication = FALSE for IntegratedServer (Port: {}).", port);
         }
     }
 
     @Inject(method = "publishServer(Lnet/minecraft/server/MinecraftServer$MultiplayerScope;ZI)Z", at = @At("RETURN"))
     private void onPublishServerReturn(MinecraftServer.MultiplayerScope scope, boolean cheatsAllowed, int port, CallbackInfoReturnable<Boolean> cir) {
         P2PNetworkManager manager = P2PNetworkManager.getInstance();
-        if (manager.isCrackSupportEnabled()) {
+        if (manager.isOfflineModeEnabled()) {
             ((MinecraftServer) (Object) this).setUsesAuthentication(false);
-            FabricP2PMod.LOGGER.info("[P2P-Crack 26.3] Post-publishServer confirmed usesAuthentication = FALSE.");
         }
     }
 }
