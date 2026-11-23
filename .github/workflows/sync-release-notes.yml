@@ -1,0 +1,41 @@
+name: Sync GitHub Release Notes
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'CHANGELOG.md'
+      - '.github/workflows/sync-release-notes.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-notes:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update each GitHub Release with only its own CHANGELOG section
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAGS=$(gh release list --limit 100 --json tagName --jq '.[].tagName')
+          for TAG in $TAGS; do
+            awk -v tag="$TAG" '
+              { sub(/\r$/, "") }
+              $0 == "## " tag { found=1; print; next }
+              found && /^## / { exit }
+              found { print }
+            ' CHANGELOG.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > release_notes.md
+
+            if [ -s release_notes.md ]; then
+              echo "Updating release notes for $TAG..."
+              gh release edit "$TAG" --notes-file release_notes.md
+            else
+              echo "No matching CHANGELOG section for $TAG — skipping."
+            fi
+          done
