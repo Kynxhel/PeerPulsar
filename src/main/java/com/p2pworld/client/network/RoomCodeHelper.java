@@ -1,5 +1,6 @@
 package com.p2pworld.client.network;
 
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -10,21 +11,24 @@ import java.util.regex.Pattern;
 public class RoomCodeHelper {
     private static final String PREFIX = "P2P-";
     private static final String UDP_PREFIX = "UDP-";
-    private static final Pattern IP_PORT_PATTERN = Pattern.compile("^([a-zA-Z0-9.-]+)(?::([0-9]{1,5}))?$");
+    private static final Pattern IPV4_OR_HOST_PATTERN = Pattern.compile("^([a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?)(?::([0-9]{1,5}))?$");
+    private static final Pattern IPV6_BRACKET_PATTERN = Pattern.compile("^\\[([0-9a-fA-F:]+)](?::([0-9]{1,5}))?$");
     private static final Pattern EMBEDDED_UDP_CODE = Pattern.compile("(?i)UDP-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}");
     private static final Pattern EMBEDDED_HEX_CODE = Pattern.compile("(?i)P2P-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}");
     private static final Pattern EMBEDDED_B64_CODE = Pattern.compile("(?i)P2P-[A-Za-z0-9_-]{6,}");
 
     /**
-     * Encodes an IPv4 address and port into a clean, shareable Room Code.
+     * Encodes an IPv4 address (or hostname/IPv6) and port into a clean, shareable Room Code.
      * Example: 85.102.50.21:25565 -> P2P-XXXX-XXXX-XXXX
      */
     public static String encodeRoomCode(String ip, int port) {
         try {
+            // Only pack into compact 6-byte XOR hex if input is already an IPv4 literal or resolves to IPv4
             InetAddress address = InetAddress.getByName(ip);
             byte[] ipBytes = address.getAddress();
-            if (ipBytes.length != 4) {
-                String combined = ip + ":" + port;
+            if (!(address instanceof Inet4Address) || ipBytes.length != 4) {
+                String hostPart = ip.contains(":") && !ip.startsWith("[") ? ("[" + ip + "]") : ip;
+                String combined = hostPart + ":" + port;
                 return PREFIX + Base64.getUrlEncoder().withoutPadding()
                         .encodeToString(combined.getBytes(StandardCharsets.UTF_8));
             }
@@ -94,10 +98,13 @@ public class RoomCodeHelper {
         }
 
         if (raw.toUpperCase().startsWith(PREFIX)) {
-            String cleanCode = raw.substring(PREFIX.length()).replace("-", "").trim();
-            if (cleanCode.length() == 12 && isHex(cleanCode)) {
+            String payload = raw.substring(PREFIX.length()).trim();
+
+            // 1. Try 12-char XOR-encoded IPv4:port hex code (may contain visual dashes like XXXX-XXXX-XXXX)
+            String hexCandidate = payload.replace("-", "");
+            if (hexCandidate.length() == 12 && isHex(hexCandidate)) {
                 try {
-                    byte[] data = hexToBytes(cleanCode);
+                    byte[] data = hexToBytes(hexCandidate);
                     byte magic = 0x5A;
                     for (int i = 0; i < data.length; i++) {
                         data[i] = (byte) (data[i] ^ magic);
@@ -106,14 +113,16 @@ public class RoomCodeHelper {
                     byte[] ipBytes = new byte[4];
                     buffer.get(ipBytes);
                     int port = buffer.getShort() & 0xFFFF;
-                    if (port < 1 || port > 65535) return null;
-                    InetAddress address = InetAddress.getByAddress(ipBytes);
-                    return new ConnectionTarget(address.getHostAddress(), port, false);
+                    if (port >= 1 && port <= 65535) {
+                        InetAddress address = InetAddress.getByAddress(ipBytes);
+                        return new ConnectionTarget(address.getHostAddress(), port, false);
+                    }
                 } catch (Exception ignored) {}
             }
 
+            // 2. Try Base64url-encoded host:port WITHOUT stripping '-' (since '-' is a valid Base64url character!)
             try {
-                byte[] decoded = Base64.getUrlDecoder().decode(cleanCode);
+                byte[] decoded = Base64.getUrlDecoder().decode(payload);
                 String str = new String(decoded, StandardCharsets.UTF_8);
                 return parseDirectHostPort(str);
             } catch (Exception ignored) {}
@@ -123,22 +132,37 @@ public class RoomCodeHelper {
     }
 
     private static ConnectionTarget parseDirectHostPort(String input) {
-        Matcher matcher = IP_PORT_PATTERN.matcher(input);
+        if (input == null) return null;
+        String trimmed = input.trim();
+
+        Matcher v6 = IPV6_BRACKET_PATTERN.matcher(trimmed);
+        if (v6.matches()) {
+            String host = v6.group(1);
+            int port = parsePort(v6.group(2));
+            if (port < 1 || port > 65535) return null;
+            return new ConnectionTarget(host, port, false);
+        }
+
+        Matcher matcher = IPV4_OR_HOST_PATTERN.matcher(trimmed);
         if (matcher.matches()) {
             String host = matcher.group(1);
-            String portStr = matcher.group(2);
-            int port = 25565;
-            if (portStr != null && !portStr.isEmpty()) {
-                try {
-                    port = Integer.parseInt(portStr);
-                } catch (NumberFormatException e) {
-                    return null;
-                }
-            }
+            if (host.contains("..")) return null;
+            int port = parsePort(matcher.group(2));
             if (port < 1 || port > 65535) return null;
             return new ConnectionTarget(host, port, false);
         }
         return null;
+    }
+
+    private static int parsePort(String portStr) {
+        if (portStr == null || portStr.isEmpty()) {
+            return 25565;
+        }
+        try {
+            return Integer.parseInt(portStr);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     public static String generateDiscordInvite(String roomCode, String hostIp, int port, boolean offlineMode, String gameMode) {

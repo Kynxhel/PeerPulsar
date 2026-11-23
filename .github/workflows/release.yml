@@ -36,14 +36,17 @@ jobs:
           chmod +x gradlew
           ./gradlew build
 
-      - name: Clean old releases and publish fresh GitHub Release
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for tag in $(gh release list --json tagName -q '.[].tagName'); do
-            gh release delete "$tag" --yes || true
-          done
+          MOD_JAR=$(find build/libs -maxdepth 1 -name 'fabric-p2p-world-*.jar' ! -name '*-sources.jar' | head -n 1)
+          if [ -z "$MOD_JAR" ]; then
+            echo "Built mod JAR not found!" >&2
+            exit 1
+          fi
+          gh release delete "${GITHUB_REF_NAME}" --yes || true
           gh release create "${GITHUB_REF_NAME}" \
-            build/libs/fabric-p2p-world-*.jar \
+            "$MOD_JAR" \
             --title "Fabric P2P World ${GITHUB_REF_NAME}" \
             --notes-file CHANGELOG.md

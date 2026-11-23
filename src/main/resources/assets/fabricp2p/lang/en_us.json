@@ -17,8 +17,10 @@
 
   "screen.fabricp2p.host.diag_testing": "TESTING INTERNET, UPnP & CGNAT...",
   "screen.fabricp2p.host.diag_direct_ok": "DIRECT P2P SUPPORTED • Open NAT + UPnP Ready",
+  "screen.fabricp2p.host.diag_cgnat_udp": "CGNAT (Cone NAT) → Direct UDP Hole Punch Ready!",
   "screen.fabricp2p.host.diag_cgnat_tunnel": "CGNAT DETECTED → Auto-Tunnel Ready (%sms)",
   "screen.fabricp2p.host.diag_cgnat_blocked": "CGNAT DETECTED • Tunnel Unreachable",
+  "screen.fabricp2p.host.diag_upnp_udp": "UPnP OFF → Direct UDP Hole Punch Ready!",
   "screen.fabricp2p.host.diag_upnp_tunnel": "UPnP OFF → Auto-Tunnel Ready (%sms)",
   "screen.fabricp2p.host.diag_upnp_blocked": "UPnP OFF & Tunnel Unreachable",
   "screen.fabricp2p.host.diag_no_internet": "NO INTERNET • Cannot Host P2P",
@@ -53,6 +55,7 @@
   "screen.fabricp2p.host.btn_unsupported": "✕ NET UNSUPPORTED",
 
   "screen.fabricp2p.host.toast_diag_direct": "✦ Direct P2P supported! Open NAT & UPnP verified.",
+  "screen.fabricp2p.host.toast_diag_udp": "⚡ Cone NAT verified — Direct 0ms UDP Hole Punch ready!",
   "screen.fabricp2p.host.toast_diag_cgnat_tunnel": "⚡ CGNAT detected — Automatic Tunnel Fallback ready (%sms)!",
   "screen.fabricp2p.host.toast_diag_upnp_tunnel": "⚡ UPnP disabled — Automatic Tunnel Fallback ready (%sms)!",
   "screen.fabricp2p.host.toast_diag_blocked": "⚠ Direct P2P & Tunnel blocked! Check firewall/ISP.",
@@ -138,7 +141,8 @@
   "screen.fabricp2p.shared.btn_no_world": "No Shared World Selected",
   "screen.fabricp2p.shared.btn_upload_current": "☁ UPLOAD CURRENT WORLD",
   "screen.fabricp2p.shared.disabled_hint": "Enable Shared Worlds above to sync & rotate hosting with friends.",
-  "screen.fabricp2p.shared.setup_hint": "Enter a valid Google Drive / OneDrive synced folder path above & click Save.",
+  "screen.fabricp2p.shared.setup_hint": "Sign in with Google above or enter a local synced folder path.",
+  "screen.fabricp2p.shared.loading_hint": "☁ Loading shared worlds...",
   "screen.fabricp2p.shared.empty_hint": "No shared worlds found yet. Open a world & click 'Upload Current World'!",
   "screen.fabricp2p.shared.toast_enabled": "☁ Shared Cloud Worlds enabled!",
   "screen.fabricp2p.shared.toast_disabled": "Shared Cloud Worlds disabled.",

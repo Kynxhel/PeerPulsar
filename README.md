@@ -2,7 +2,7 @@
 
 [![Minecraft 26.3](https://img.shields.io/badge/Minecraft-26.3-10B981?style=for-the-badge)](https://www.minecraft.net/)
 [![Fabric Loader](https://img.shields.io/badge/Fabric-0.19.5+-00F0FF?style=for-the-badge)](https://fabricmc.net/)
-[![Java 21+](https://img.shields.io/badge/Java-21+-A855F7?style=for-the-badge)](https://adoptium.net/)
+[![Java 25+](https://img.shields.io/badge/Java-25+-A855F7?style=for-the-badge)](https://adoptium.net/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/Sponsor-Kynxhel-EA4AAA?style=for-the-badge&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/Kynxhel)
 
@@ -40,7 +40,7 @@ When you open the **Start P2P** screen, the mod automatically tests your network
 
 1. Install **Minecraft 26.3** with **Fabric Loader `>= 0.19.5`**.
 2. Download and install **Fabric API** for Minecraft `26.3`.
-3. Drop `fabric-p2p-world-26.3-2.0.0+26.3.jar` into your `.minecraft/mods/` folder.
+3. Drop `fabric-p2p-world-26.3-2.1.0+26.3.jar` into your `.minecraft/mods/` folder.
 4. Launch the game — open any world, press `Esc`, and click **`Start P2P`**!
 
 ---

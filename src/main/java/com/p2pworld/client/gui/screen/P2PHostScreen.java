@@ -51,6 +51,7 @@ public class P2PHostScreen extends Screen {
     private int panelLeft;
     private int sideLeft;
     private int topY;
+    private boolean compact;
 
     public P2PHostScreen(Screen parent) {
         super(Component.translatable("screen.fabricp2p.host.title"));
@@ -63,22 +64,27 @@ public class P2PHostScreen extends Screen {
     }
 
     private void computeLayout() {
+        this.compact = this.height < 276;
         this.sideGap = 8;
-        this.sideW = (this.width >= 520) ? 168 : 152;
-        this.panelW = Math.min(316, Math.max(256, this.width - this.sideW - this.sideGap - 16));
+        this.sideW = (this.width >= 520) ? 168 : 156;
+        this.panelW = Math.min(316, Math.max(244, this.width - this.sideW - this.sideGap - 16));
         int totalW = this.panelW + this.sideGap + this.sideW;
-        this.panelLeft = (this.width - totalW) / 2;
+        this.panelLeft = Math.max(6, (this.width - totalW) / 2);
         this.sideLeft = this.panelLeft + this.panelW + this.sideGap;
-        this.topY = Math.max(16, (this.height - 252) / 2);
+        int totalH = compact ? 232 : 262;
+        this.topY = Math.max(8, (this.height - totalH) / 2);
     }
 
     @Override
     protected void init() {
         computeLayout();
 
+        int heroY = topY + (compact ? 30 : 36);
+        int heroH = compact ? 72 : 78;
+
         // Quick Re-Test Internet & NAT Diagnostics button (top-right inside status hero card)
         this.retestButton = new NeonButton(
-                panelLeft + panelW - 56, topY + 41, 46, 14,
+                panelLeft + panelW - 56, heroY + 5, 46, 14,
                 Component.translatable("screen.fabricp2p.host.btn_retest"),
                 NeonTheme.AMBER,
                 () -> runNetworkCheck(true)
@@ -86,8 +92,9 @@ public class P2PHostScreen extends Screen {
         this.addRenderableWidget(retestButton);
 
         // Quick Copy Raw Room Code button (inside status hero card)
+        int codeBoxY = heroY + heroH - 25;
         this.copyCodeQuickButton = new NeonButton(
-                panelLeft + panelW - 84, topY + 91, 74, 18,
+                panelLeft + panelW - 84, codeBoxY, 74, 18,
                 Component.translatable("screen.fabricp2p.host.btn_copy_raw"),
                 NeonTheme.CYAN,
                 () -> {
@@ -102,11 +109,11 @@ public class P2PHostScreen extends Screen {
         this.addRenderableWidget(copyCodeQuickButton);
 
         // 2x2 Neon Toggle Card Grid (left main panel)
-        int gridTop = topY + 122;
+        int gridTop = heroY + heroH + (compact ? 5 : 8);
         int gapX = 8;
-        int gapY = 8;
+        int gapY = compact ? 5 : 8;
         int cardW = (panelW - gapX) / 2;
-        int cardH = 34;
+        int cardH = compact ? 30 : 34;
 
         this.offlineAuthCard = new NeonToggleCard(
                 panelLeft, gridTop, cardW, cardH,
@@ -182,9 +189,9 @@ public class P2PHostScreen extends Screen {
         // Right-Side Connection Mode Selector Cards (4 options)
         int sideCardX = sideLeft + 8;
         int sideCardW = sideW - 16;
-        int sideCardH = 31;
-        int sideStartY = topY + 60;
-        int sideCardGap = 5;
+        int sideCardH = compact ? 28 : 31;
+        int sideStartY = heroY + 24;
+        int sideCardGap = compact ? 4 : 5;
 
         NetworkDiagnosticsService diag = NetworkDiagnosticsService.getInstance();
 
@@ -275,11 +282,12 @@ public class P2PHostScreen extends Screen {
         this.addRenderableWidget(lanModeCard);
 
         // Primary Action Bar (left main panel)
-        int actionY = gridTop + (cardH + gapY) * 2 + 6;
+        int actionY = gridTop + (cardH + gapY) * 2 + (compact ? 4 : 6);
+        int actionH = compact ? 21 : 24;
         int halfW = (panelW - gapX) / 2;
 
         this.startStopButton = new NeonButton(
-                panelLeft, actionY, halfW, 24,
+                panelLeft, actionY, halfW, actionH,
                 Component.translatable("screen.fabricp2p.host.btn_start").withStyle(ChatFormatting.BOLD),
                 NeonTheme.EMERALD,
                 this::handleStartOrStop
@@ -287,7 +295,7 @@ public class P2PHostScreen extends Screen {
         this.addRenderableWidget(startStopButton);
 
         this.copyDiscordButton = new NeonButton(
-                panelLeft + halfW + gapX, actionY, halfW, 24,
+                panelLeft + halfW + gapX, actionY, halfW, actionH,
                 Component.translatable("screen.fabricp2p.host.btn_copy_invite"),
                 NeonTheme.VIOLET,
                 () -> {
@@ -300,7 +308,7 @@ public class P2PHostScreen extends Screen {
                                 networkManager.getSelectedGameType().getName()
                         );
                         this.minecraft.keyboardHandler.setClipboard(discordMsg);
-                        particleBg.spawnBurst(copyDiscordButton.getX() + halfW / 2, copyDiscordButton.getY() + 12, NeonTheme.VIOLET, 30);
+                        particleBg.spawnBurst(copyDiscordButton.getX() + halfW / 2, copyDiscordButton.getY() + actionH / 2, NeonTheme.VIOLET, 30);
                         showToast(tr("screen.fabricp2p.host.toast_invite_copied"), NeonTheme.VIOLET);
                     } else {
                         showToast(tr("screen.fabricp2p.host.toast_start_first"), NeonTheme.AMBER);
@@ -309,8 +317,9 @@ public class P2PHostScreen extends Screen {
         );
         this.addRenderableWidget(copyDiscordButton);
 
+        int footerY = Math.min(this.height - 22, actionY + actionH + (compact ? 4 : 6));
         this.backButton = new NeonButton(
-                this.width / 2 - 144, actionY + 30, 138, 20,
+                this.width / 2 - 144, footerY, 138, 20,
                 Component.literal("← ").append(Component.translatable("gui.back")),
                 NeonTheme.SLATE,
                 () -> {
@@ -322,7 +331,7 @@ public class P2PHostScreen extends Screen {
         this.addRenderableWidget(backButton);
 
         NeonButton sharedWorldsBtn = new NeonButton(
-                this.width / 2 + 6, actionY + 30, 138, 20,
+                this.width / 2 + 6, footerY, 138, 20,
                 Component.literal("☁ ").append(Component.translatable("menu.fabricp2p.shared_worlds")),
                 NeonTheme.VIOLET,
                 () -> {
@@ -362,18 +371,24 @@ public class P2PHostScreen extends Screen {
                     if (showResultToast) {
                         switch (report.status()) {
                             case DIRECT_SUPPORTED -> showToast(tr("screen.fabricp2p.host.toast_diag_direct"), NeonTheme.EMERALD);
-                            case CGNAT_DETECTED -> showToast(
-                                    report.tunnelAvailable()
-                                            ? tr("screen.fabricp2p.host.toast_diag_cgnat_tunnel", report.tunnelLatencyMs())
-                                            : tr("screen.fabricp2p.host.toast_diag_blocked"),
-                                    report.tunnelAvailable() ? NeonTheme.VIOLET : NeonTheme.CRIMSON
-                            );
-                            case UPNP_UNAVAILABLE -> showToast(
-                                    report.tunnelAvailable()
-                                            ? tr("screen.fabricp2p.host.toast_diag_upnp_tunnel", report.tunnelLatencyMs())
-                                            : tr("screen.fabricp2p.host.toast_diag_blocked"),
-                                    report.tunnelAvailable() ? NeonTheme.VIOLET : NeonTheme.CRIMSON
-                            );
+                            case CGNAT_DETECTED -> {
+                                if (report.udpHolePunchSupported()) {
+                                    showToast(tr("screen.fabricp2p.host.toast_diag_udp"), NeonTheme.CYAN);
+                                } else if (report.tunnelAvailable()) {
+                                    showToast(tr("screen.fabricp2p.host.toast_diag_cgnat_tunnel", report.tunnelLatencyMs()), NeonTheme.VIOLET);
+                                } else {
+                                    showToast(tr("screen.fabricp2p.host.toast_diag_blocked"), NeonTheme.CRIMSON);
+                                }
+                            }
+                            case UPNP_UNAVAILABLE -> {
+                                if (report.udpHolePunchSupported()) {
+                                    showToast(tr("screen.fabricp2p.host.toast_diag_udp"), NeonTheme.CYAN);
+                                } else if (report.tunnelAvailable()) {
+                                    showToast(tr("screen.fabricp2p.host.toast_diag_upnp_tunnel", report.tunnelLatencyMs()), NeonTheme.VIOLET);
+                                } else {
+                                    showToast(tr("screen.fabricp2p.host.toast_diag_blocked"), NeonTheme.CRIMSON);
+                                }
+                            }
                             case NO_INTERNET -> showToast(tr("screen.fabricp2p.host.toast_diag_offline"), NeonTheme.CRIMSON);
                             default -> {}
                         }
@@ -523,15 +538,18 @@ public class P2PHostScreen extends Screen {
         boolean active = networkManager.isP2PActive();
         int primaryAccent = active ? NeonTheme.EMERALD : NeonTheme.CYAN;
 
-        // 1. Header with Custom Generated Logo & Live Status Badges (spanning full dual-pane width)
+        // 1. Header with Custom Generated Logo & Live Status Badges
         int headerY = topY + slideOffset;
         int totalRight = sideLeft + sideW;
-        NeonRenderUtils.drawModLogo(graphics, panelLeft + 2, headerY, 28, primaryAccent, timeSec);
+        int logoSize = compact ? 24 : 28;
+        NeonRenderUtils.drawModLogo(graphics, panelLeft + 2, headerY, logoSize, primaryAccent, timeSec);
 
         graphics.text(this.font, Component.literal("FABRIC P2P WORLD").withStyle(ChatFormatting.BOLD),
-                panelLeft + 38, headerY + 2, NeonTheme.TEXT_PRIMARY, true);
-        graphics.text(this.font, tr("screen.fabricp2p.host.subtitle"),
-                panelLeft + 38, headerY + 15, NeonTheme.TEXT_SECONDARY, false);
+                panelLeft + logoSize + 10, headerY + 2, NeonTheme.TEXT_PRIMARY, true);
+        if (!compact) {
+            graphics.text(this.font, tr("screen.fabricp2p.host.subtitle"),
+                    panelLeft + logoSize + 10, headerY + 15, NeonTheme.TEXT_SECONDARY, false);
+        }
 
         String stateBadge = active
                 ? tr("screen.fabricp2p.host.badge_live")
@@ -541,22 +559,24 @@ public class P2PHostScreen extends Screen {
 
         NeonRenderUtils.drawBadge(
                 graphics, this.font,
-                stateBadgeX, headerY + 6,
+                stateBadgeX, headerY + (compact ? 4 : 6),
                 stateBadge,
                 active ? NeonTheme.EMERALD : NeonTheme.SLATE,
                 active, timeSec
         );
-        NeonRenderUtils.drawBadge(
-                graphics, this.font,
-                stateBadgeX - 56, headerY + 6,
-                "MC 26.3",
-                NeonTheme.VIOLET,
-                false, timeSec
-        );
+        if (this.width >= 470) {
+            NeonRenderUtils.drawBadge(
+                    graphics, this.font,
+                    stateBadgeX - 56, headerY + (compact ? 4 : 6),
+                    "MC 26.3",
+                    NeonTheme.VIOLET,
+                    false, timeSec
+            );
+        }
 
         // 2. Hero Telemetry & Room Code Glass Card (Left Panel)
-        int cardY = topY + 36;
-        int cardH = 78;
+        int cardY = topY + (compact ? 30 : 36);
+        int cardH = compact ? 72 : 78;
         NeonRenderUtils.drawGlassCard(graphics, panelLeft, cardY, panelW, cardH, primaryAccent, true, timeSec);
 
         UPnPService upnp = UPnPService.getInstance();
@@ -584,15 +604,27 @@ public class P2PHostScreen extends Screen {
             statusLabel = tr("screen.fabricp2p.host.diag_direct_ok");
             statusColor = NeonTheme.EMERALD;
         } else if (report.status() == NetworkDiagnosticsService.P2PCompatibilityStatus.CGNAT_DETECTED) {
-            statusLabel = report.tunnelAvailable()
-                    ? tr("screen.fabricp2p.host.diag_cgnat_tunnel", report.tunnelLatencyMs())
-                    : tr("screen.fabricp2p.host.diag_cgnat_blocked");
-            statusColor = report.tunnelAvailable() ? NeonTheme.VIOLET : NeonTheme.CRIMSON;
+            if (report.udpHolePunchSupported()) {
+                statusLabel = tr("screen.fabricp2p.host.diag_cgnat_udp");
+                statusColor = NeonTheme.CYAN;
+            } else if (report.tunnelAvailable()) {
+                statusLabel = tr("screen.fabricp2p.host.diag_cgnat_tunnel", report.tunnelLatencyMs());
+                statusColor = NeonTheme.VIOLET;
+            } else {
+                statusLabel = tr("screen.fabricp2p.host.diag_cgnat_blocked");
+                statusColor = NeonTheme.CRIMSON;
+            }
         } else if (report.status() == NetworkDiagnosticsService.P2PCompatibilityStatus.UPNP_UNAVAILABLE) {
-            statusLabel = report.tunnelAvailable()
-                    ? tr("screen.fabricp2p.host.diag_upnp_tunnel", report.tunnelLatencyMs())
-                    : tr("screen.fabricp2p.host.diag_upnp_blocked");
-            statusColor = report.tunnelAvailable() ? NeonTheme.AMBER : NeonTheme.CRIMSON;
+            if (report.udpHolePunchSupported()) {
+                statusLabel = tr("screen.fabricp2p.host.diag_upnp_udp");
+                statusColor = NeonTheme.CYAN;
+            } else if (report.tunnelAvailable()) {
+                statusLabel = tr("screen.fabricp2p.host.diag_upnp_tunnel", report.tunnelLatencyMs());
+                statusColor = NeonTheme.AMBER;
+            } else {
+                statusLabel = tr("screen.fabricp2p.host.diag_upnp_blocked");
+                statusColor = NeonTheme.CRIMSON;
+            }
         } else if (report.status() == NetworkDiagnosticsService.P2PCompatibilityStatus.NO_INTERNET) {
             statusLabel = tr("screen.fabricp2p.host.diag_no_internet");
             statusColor = NeonTheme.CRIMSON;
@@ -600,12 +632,18 @@ public class P2PHostScreen extends Screen {
             statusLabel = tr("screen.fabricp2p.host.upnp_idle");
             statusColor = NeonTheme.TEXT_SECONDARY;
         }
-        graphics.text(this.font, "◈ " + statusLabel, panelLeft + 10, cardY + 9, NeonTheme.withAlpha(statusColor, 255), true);
+
+        int maxStatusW = panelW - (active ? 20 : 70);
+        String drawnStatus = "◈ " + statusLabel;
+        if (this.font.width(drawnStatus) > maxStatusW) {
+            drawnStatus = this.font.plainSubstrByWidth(drawnStatus, Math.max(20, maxStatusW - 8)) + "...";
+        }
+        graphics.text(this.font, drawnStatus, panelLeft + 10, cardY + 8, NeonTheme.withAlpha(statusColor, 255), true);
 
         if (diag.isTesting() || upnp.getStatus() == UPnPService.UPnPStatus.SEARCHING || networkManager.isStarting()) {
-            NeonRenderUtils.drawScannerBar(graphics, panelLeft + 10, cardY + 21, panelW - 20, NeonTheme.AMBER, timeSec);
+            NeonRenderUtils.drawScannerBar(graphics, panelLeft + 10, cardY + 20, panelW - 20, NeonTheme.AMBER, timeSec);
         } else {
-            graphics.horizontalLine(panelLeft + 10, panelLeft + panelW - 10, cardY + 22, NeonTheme.withAlpha(primaryAccent, 45));
+            graphics.horizontalLine(panelLeft + 10, panelLeft + panelW - 10, cardY + 21, NeonTheme.withAlpha(primaryAccent, 45));
         }
 
         int localPort = networkManager.getHostedPort();
@@ -617,19 +655,23 @@ public class P2PHostScreen extends Screen {
                 ? (networkManager.getOnlinePlayerCount(this.minecraft) + "/" + networkManager.getMaxPlayerCount(this.minecraft))
                 : "0/8";
 
-        int col2X = panelLeft + (panelW * 44) / 100;
-        int col3X = panelLeft + panelW - 58;
+        int col2X = panelLeft + (panelW * 46) / 100;
+        int col3X = panelLeft + panelW - 54;
+        int labelY = cardY + (compact ? 24 : 27);
+        int valY = labelY + 10;
 
-        graphics.text(this.font, tr("screen.fabricp2p.host.label_ext_ip"), panelLeft + 10, cardY + 28, NeonTheme.TEXT_MUTED, false);
-        graphics.text(this.font, extAddr, panelLeft + 10, cardY + 39, active ? NeonTheme.TEXT_PRIMARY : NeonTheme.TEXT_MUTED, true);
+        graphics.text(this.font, tr("screen.fabricp2p.host.label_ext_ip"), panelLeft + 10, labelY, NeonTheme.TEXT_MUTED, false);
+        String trimmedExt = this.font.plainSubstrByWidth(extAddr, Math.max(40, col2X - panelLeft - 14));
+        graphics.text(this.font, trimmedExt, panelLeft + 10, valY, active ? NeonTheme.TEXT_PRIMARY : NeonTheme.TEXT_MUTED, true);
 
-        graphics.text(this.font, tr("screen.fabricp2p.host.label_lan_ip"), col2X, cardY + 28, NeonTheme.TEXT_MUTED, false);
-        graphics.text(this.font, localAddr, col2X, cardY + 39, active ? NeonTheme.TEXT_SECONDARY : NeonTheme.TEXT_MUTED, false);
+        graphics.text(this.font, tr("screen.fabricp2p.host.label_lan_ip"), col2X, labelY, NeonTheme.TEXT_MUTED, false);
+        String trimmedLocal = this.font.plainSubstrByWidth(localAddr, Math.max(40, col3X - col2X - 6));
+        graphics.text(this.font, trimmedLocal, col2X, valY, active ? NeonTheme.TEXT_SECONDARY : NeonTheme.TEXT_MUTED, false);
 
-        graphics.text(this.font, tr("screen.fabricp2p.host.label_players"), col3X, cardY + 28, NeonTheme.TEXT_MUTED, false);
-        graphics.text(this.font, playerCount, col3X, cardY + 39, active ? NeonTheme.withAlpha(NeonTheme.EMERALD, 255) : NeonTheme.TEXT_MUTED, true);
+        graphics.text(this.font, tr("screen.fabricp2p.host.label_players"), col3X, labelY, NeonTheme.TEXT_MUTED, false);
+        graphics.text(this.font, playerCount, col3X, valY, active ? NeonTheme.withAlpha(NeonTheme.EMERALD, 255) : NeonTheme.TEXT_MUTED, true);
 
-        int codeBoxY = cardY + 53;
+        int codeBoxY = cardY + cardH - 25;
         int codeBoxRight = active ? (panelLeft + panelW - 90) : (panelLeft + panelW - 10);
         graphics.fill(panelLeft + 10, codeBoxY, codeBoxRight, codeBoxY + 18, NeonTheme.INPUT_BG);
         graphics.outline(panelLeft + 10, codeBoxY, codeBoxRight - (panelLeft + 10), 18,
@@ -642,12 +684,15 @@ public class P2PHostScreen extends Screen {
             graphics.text(this.font, Component.literal(code).withStyle(ChatFormatting.BOLD),
                     panelLeft + 20 + this.font.width(codeLabel), codeBoxY + 5, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
         } else {
-            graphics.text(this.font, tr("screen.fabricp2p.host.room_code_placeholder"),
-                    panelLeft + 16, codeBoxY + 5, NeonTheme.TEXT_MUTED, false);
+            String placeholder = this.font.plainSubstrByWidth(
+                    tr("screen.fabricp2p.host.room_code_placeholder"), Math.max(40, codeBoxRight - panelLeft - 24));
+            graphics.text(this.font, placeholder, panelLeft + 16, codeBoxY + 5, NeonTheme.TEXT_MUTED, false);
         }
 
         // 3. Right-Side Connection Mode Selector Panel
-        int sidePanelH = 216;
+        int sideCardH = compact ? 28 : 31;
+        int sideCardGap = compact ? 4 : 5;
+        int sidePanelH = 24 + (sideCardH * 4) + (sideCardGap * 3) + 24;
         int sideAccent = switch (networkManager.getSelectedConnectionMode()) {
             case UDP_HOLE_PUNCH -> NeonTheme.CYAN;
             case TUNNEL_RELAY -> NeonTheme.VIOLET;
@@ -661,18 +706,21 @@ public class P2PHostScreen extends Screen {
         graphics.horizontalLine(sideLeft + 10, sideLeft + sideW - 10, cardY + 20, NeonTheme.withAlpha(sideAccent, 70));
 
         // Legend at bottom of right-side panel: Green dot = Supported, Red dot = Unsupported
-        int legendY = cardY + sidePanelH - 16;
-        graphics.horizontalLine(sideLeft + 10, sideLeft + sideW - 10, legendY - 5, NeonTheme.withAlpha(NeonTheme.SLATE, 55));
+        int legendY = cardY + sidePanelH - 14;
+        graphics.horizontalLine(sideLeft + 10, sideLeft + sideW - 10, legendY - 4, NeonTheme.withAlpha(NeonTheme.SLATE, 55));
 
-        // Green dot + label
-        graphics.fill(sideLeft + 10, legendY + 1, sideLeft + 15, legendY + 6, NeonTheme.withAlpha(NeonTheme.EMERALD, 255));
         String supText = tr("screen.fabricp2p.host.legend_supported");
+        String unsupText = tr("screen.fabricp2p.host.legend_unsupported");
+        if (sideLeft + 18 + this.font.width(supText) + 14 + this.font.width(unsupText) > sideLeft + sideW - 6) {
+            supText = "OK";
+            unsupText = "Blocked";
+        }
+        graphics.fill(sideLeft + 10, legendY + 1, sideLeft + 15, legendY + 6, NeonTheme.withAlpha(NeonTheme.EMERALD, 255));
         graphics.text(this.font, supText, sideLeft + 18, legendY, NeonTheme.TEXT_SECONDARY, false);
 
-        // Red dot + label
         int redDotX = sideLeft + 24 + this.font.width(supText);
         graphics.fill(redDotX, legendY + 1, redDotX + 5, legendY + 6, NeonTheme.withAlpha(NeonTheme.CRIMSON, 255));
-        graphics.text(this.font, tr("screen.fabricp2p.host.legend_unsupported"), redDotX + 8, legendY, NeonTheme.TEXT_SECONDARY, false);
+        graphics.text(this.font, unsupText, redDotX + 8, legendY, NeonTheme.TEXT_SECONDARY, false);
     }
 
     @Override

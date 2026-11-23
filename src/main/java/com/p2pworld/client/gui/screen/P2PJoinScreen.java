@@ -27,7 +27,9 @@ public class P2PJoinScreen extends Screen {
     private NeonButton connectButton;
     private NeonButton backButton;
 
+    private String savedInputText = "";
     private RoomCodeHelper.ConnectionTarget parsedTarget = null;
+    private String activeOpTargetLabel = "";
     private P2PNetworkManager.PingResult lastPingResult = null;
     private boolean isTesting = false;
     private boolean isPunching = false;
@@ -45,12 +47,16 @@ public class P2PJoinScreen extends Screen {
         return Component.translatable(key, args).getString();
     }
 
+    private int computeCardY() {
+        return Math.max(46, Math.min(this.height - 172, this.height / 2 - 66));
+    }
+
     @Override
     protected void init() {
         int cx = this.width / 2;
-        int panelW = 328;
+        int panelW = Math.min(328, this.width - 20);
         int panelLeft = cx - panelW / 2;
-        int cardY = Math.max(54, this.height / 2 - 66);
+        int cardY = computeCardY();
 
         // Borderless EditBox nested inside custom glowing neon frame
         this.inputField = new EditBox(this.font, panelLeft + 18, cardY + 34, panelW - 104, 14, Component.literal("Room Code / IP"));
@@ -58,6 +64,7 @@ public class P2PJoinScreen extends Screen {
         this.inputField.setBordered(false);
         this.inputField.setTextColor(NeonTheme.TEXT_PRIMARY);
         this.inputField.setHint(Component.translatable("screen.fabricp2p.join.placeholder").withStyle(ChatFormatting.DARK_GRAY));
+        this.inputField.setValue(this.savedInputText);
         this.inputField.setResponder(this::onInputChanged);
         this.addRenderableWidget(inputField);
         this.setInitialFocus(inputField);
@@ -81,7 +88,7 @@ public class P2PJoinScreen extends Screen {
         this.addRenderableWidget(pasteButton);
 
         // Action Row: Test Ping & Connect
-        int btnY = cardY + 114;
+        int btnY = cardY + 112;
         int halfW = (panelW - 10) / 2;
 
         this.testPingButton = new NeonButton(
@@ -90,7 +97,6 @@ public class P2PJoinScreen extends Screen {
                 NeonTheme.VIOLET,
                 this::testConnection
         );
-        this.testPingButton.active = false;
         this.addRenderableWidget(testPingButton);
 
         this.connectButton = new NeonButton(
@@ -99,12 +105,11 @@ public class P2PJoinScreen extends Screen {
                 NeonTheme.EMERALD,
                 this::connectToWorld
         );
-        this.connectButton.active = false;
         this.addRenderableWidget(connectButton);
 
         // Cancel / Back Button
         this.backButton = new NeonButton(
-                cx - 70, btnY + 32, 140, 20,
+                cx - 70, btnY + 30, 140, 20,
                 Component.literal("← ").append(Component.translatable("gui.cancel")),
                 NeonTheme.SLATE,
                 () -> {
@@ -114,37 +119,54 @@ public class P2PJoinScreen extends Screen {
                 }
         );
         this.addRenderableWidget(backButton);
+
+        // Sync button states after init / window resize
+        syncButtonStates();
     }
 
     private void onInputChanged(String text) {
-        this.parsedTarget = RoomCodeHelper.parseInput(text);
+        this.savedInputText = text != null ? text : "";
+        this.parsedTarget = RoomCodeHelper.parseInput(this.savedInputText);
         this.lastPingResult = null;
-        boolean valid = (this.parsedTarget != null);
+        syncButtonStates();
+    }
 
+    private void syncButtonStates() {
+        boolean valid = (this.parsedTarget != null);
         if (this.connectButton != null) {
-            this.connectButton.active = valid;
-            this.connectButton.setPulsingBeacon(valid);
+            this.connectButton.active = valid && !this.isPunching;
+            this.connectButton.setPulsingBeacon(valid && !this.isPunching);
+            if (this.isPunching) {
+                this.connectButton.setAccentRgb(NeonTheme.AMBER);
+                this.connectButton.setMessage(Component.translatable("screen.fabricp2p.join.btn_punching").withStyle(ChatFormatting.BOLD));
+            } else {
+                this.connectButton.setAccentRgb(NeonTheme.EMERALD);
+                this.connectButton.setMessage(Component.translatable("screen.fabricp2p.join.btn_connect").withStyle(ChatFormatting.BOLD));
+            }
         }
         if (this.testPingButton != null) {
-            this.testPingButton.active = valid && !this.isTesting && !this.parsedTarget.isUdpHolePunch();
+            this.testPingButton.active = valid && !this.isTesting && !this.isPunching && !this.parsedTarget.isUdpHolePunch();
+            this.testPingButton.setMessage(Component.translatable(
+                    this.isTesting ? "screen.fabricp2p.join.btn_testing" : "screen.fabricp2p.join.btn_test"
+            ));
         }
     }
 
     private void testConnection() {
-        if (this.parsedTarget == null || this.minecraft == null) return;
+        if (this.parsedTarget == null || this.parsedTarget.isUdpHolePunch() || this.minecraft == null || this.isTesting) return;
         RoomCodeHelper.ConnectionTarget target = this.parsedTarget;
 
         this.isTesting = true;
+        this.activeOpTargetLabel = target.host() + ":" + target.port();
         this.lastPingResult = null;
-        this.testPingButton.active = false;
-        this.testPingButton.setMessage(Component.translatable("screen.fabricp2p.join.btn_testing"));
+        syncButtonStates();
 
         P2PNetworkManager.getInstance().pingTarget(target.host(), target.port()).thenAccept(res -> {
+            if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
                 this.isTesting = false;
                 this.lastPingResult = res;
-                this.testPingButton.active = (this.parsedTarget != null);
-                this.testPingButton.setMessage(Component.translatable("screen.fabricp2p.join.btn_test"));
+                syncButtonStates();
 
                 if (res.success()) {
                     particleBg.spawnBurst(this.width / 2.0f, this.height / 2.0f + 10, NeonTheme.EMERALD, 36);
@@ -163,9 +185,8 @@ public class P2PJoinScreen extends Screen {
 
         if (target.isUdpHolePunch()) {
             this.isPunching = true;
-            this.connectButton.active = false;
-            this.connectButton.setAccentRgb(NeonTheme.AMBER);
-            this.connectButton.setMessage(Component.translatable("screen.fabricp2p.join.btn_punching").withStyle(ChatFormatting.BOLD));
+            this.activeOpTargetLabel = target.host();
+            syncButtonStates();
             showToast(tr("screen.fabricp2p.join.toast_punching"), NeonTheme.CYAN);
 
             UdpHolePunchService.getInstance().startClientProxyAsync(target.host()).thenAccept(res -> {
@@ -187,9 +208,7 @@ public class P2PJoinScreen extends Screen {
                                 null
                         );
                     } else {
-                        this.connectButton.active = true;
-                        this.connectButton.setAccentRgb(NeonTheme.EMERALD);
-                        this.connectButton.setMessage(Component.translatable("screen.fabricp2p.join.btn_connect").withStyle(ChatFormatting.BOLD));
+                        syncButtonStates();
                         showToast(tr("screen.fabricp2p.join.toast_punch_fail", res.error() != null ? res.error() : "timeout"), NeonTheme.CRIMSON);
                     }
                 });
@@ -229,11 +248,12 @@ public class P2PJoinScreen extends Screen {
         particleBg.render(graphics, this.width, this.height, mouseX, mouseY, online);
 
         int cx = this.width / 2;
-        int panelW = 328;
+        int panelW = Math.min(328, this.width - 20);
         int panelLeft = cx - panelW / 2;
-        int cardY = Math.max(54, this.height / 2 - 66);
+        int cardY = computeCardY();
         int slideOffset = Math.round((1.0f - enterT) * -10.0f);
-        int cardAccent = online ? NeonTheme.EMERALD : (parsedTarget != null ? NeonTheme.CYAN : NeonTheme.VIOLET);
+        RoomCodeHelper.ConnectionTarget currentTarget = this.parsedTarget;
+        int cardAccent = online ? NeonTheme.EMERALD : (currentTarget != null ? NeonTheme.CYAN : NeonTheme.VIOLET);
 
         // 1. Floating Logo & Header above Portal Card
         int floatBob = Math.round((float) Math.sin(timeSec * 2.4) * 2.0f);
@@ -260,24 +280,26 @@ public class P2PJoinScreen extends Screen {
         int inputBoxH = 22;
         int inputBorderAccent = (inputField != null && inputField.isFocused())
                 ? NeonTheme.CYAN
-                : (parsedTarget != null ? NeonTheme.EMERALD : NeonTheme.SLATE);
+                : (currentTarget != null ? NeonTheme.EMERALD : NeonTheme.SLATE);
 
         graphics.fill(inputBoxLeft, inputBoxTop, inputBoxLeft + inputBoxW, inputBoxTop + inputBoxH, NeonTheme.INPUT_BG);
         graphics.outline(inputBoxLeft, inputBoxTop, inputBoxW, inputBoxH,
                 NeonTheme.withAlpha(inputBorderAccent, (inputField != null && inputField.isFocused()) ? 235 : 130));
 
-        // 3. Telemetry Status Box inside Portal Card
+        // 3. Telemetry Status Box inside Portal Card (null-safe even if input cleared mid-operation)
         int teleY = cardY + 58;
         int teleH = 36;
         graphics.fill(panelLeft + 12, teleY, panelLeft + panelW - 12, teleY + teleH, 0x99070B16);
         graphics.outline(panelLeft + 12, teleY, panelW - 24, teleH, NeonTheme.withAlpha(cardAccent, 75));
 
         if (isPunching) {
-            graphics.text(this.font, tr("screen.fabricp2p.join.punching_status", parsedTarget.host()),
+            String targetText = currentTarget != null ? currentTarget.host() : activeOpTargetLabel;
+            graphics.text(this.font, tr("screen.fabricp2p.join.punching_status", targetText),
                     panelLeft + 20, teleY + 8, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
             NeonRenderUtils.drawScannerBar(graphics, panelLeft + 20, teleY + 24, panelW - 40, NeonTheme.CYAN, timeSec);
         } else if (isTesting) {
-            graphics.text(this.font, tr("screen.fabricp2p.join.scanning", parsedTarget.host() + ":" + parsedTarget.port()),
+            String targetText = currentTarget != null ? (currentTarget.host() + ":" + currentTarget.port()) : activeOpTargetLabel;
+            graphics.text(this.font, tr("screen.fabricp2p.join.scanning", targetText),
                     panelLeft + 20, teleY + 8, NeonTheme.withAlpha(NeonTheme.AMBER, 255), true);
             NeonRenderUtils.drawScannerBar(graphics, panelLeft + 20, teleY + 24, panelW - 40, NeonTheme.AMBER, timeSec);
         } else if (lastPingResult != null) {
@@ -288,9 +310,10 @@ public class P2PJoinScreen extends Screen {
                         : "";
                 graphics.text(this.font, tr("screen.fabricp2p.join.online_label", lastPingResult.latencyMs()) + players,
                         panelLeft + 46, teleY + 7, NeonTheme.withAlpha(NeonTheme.EMERALD, 255), true);
+                String fallbackAddr = currentTarget != null ? (currentTarget.host() + ":" + currentTarget.port()) : activeOpTargetLabel;
                 String sub = (lastPingResult.motd() != null && !lastPingResult.motd().isEmpty())
                         ? lastPingResult.motd()
-                        : (parsedTarget.host() + ":" + parsedTarget.port());
+                        : fallbackAddr;
                 if (sub.length() > 44) sub = sub.substring(0, 44) + "...";
                 graphics.text(this.font, sub, panelLeft + 46, teleY + 20, NeonTheme.TEXT_SECONDARY, false);
             } else {
@@ -300,11 +323,11 @@ public class P2PJoinScreen extends Screen {
                 graphics.text(this.font, tr("screen.fabricp2p.join.offline_hint"),
                         panelLeft + 46, teleY + 20, NeonTheme.TEXT_MUTED, false);
             }
-        } else if (parsedTarget != null) {
-            String targetLabel = parsedTarget.isUdpHolePunch()
-                    ? tr("screen.fabricp2p.join.resolved_udp", parsedTarget.host())
-                    : tr("screen.fabricp2p.join.resolved", parsedTarget.host() + ":" + parsedTarget.port());
-            String hintLabel = parsedTarget.isUdpHolePunch()
+        } else if (currentTarget != null) {
+            String targetLabel = currentTarget.isUdpHolePunch()
+                    ? tr("screen.fabricp2p.join.resolved_udp", currentTarget.host())
+                    : tr("screen.fabricp2p.join.resolved", currentTarget.host() + ":" + currentTarget.port());
+            String hintLabel = currentTarget.isUdpHolePunch()
                     ? tr("screen.fabricp2p.join.resolved_udp_hint")
                     : tr("screen.fabricp2p.join.resolved_hint");
             graphics.text(this.font, targetLabel,

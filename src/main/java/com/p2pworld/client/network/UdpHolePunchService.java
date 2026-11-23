@@ -12,6 +12,7 @@ import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
@@ -23,9 +24,13 @@ import java.security.SecureRandom;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -34,7 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Pure-Java Essential-style UDP Hole Punching P2P engine with Reliable Ordered UDP (RUDP).
- * Uses Dual-STUN for NAT traversal and ntfy.sh HTTPS streaming for zero-config peer signaling,
+ * Uses IPv4 Dual-STUN for NAT traversal and ntfy.sh HTTPS streaming for zero-config peer signaling,
  * allowing direct peer-to-peer Minecraft play even behind Cone CGNAT.
  */
 public class UdpHolePunchService {
@@ -47,6 +52,11 @@ public class UdpHolePunchService {
     private static final byte MAGIC_1 = 0x32; // '2'
     private static final int HEADER_SIZE = 14;
     private static final int MAX_PAYLOAD = 1180;
+    private static final int MAX_REORDER_PACKETS = 256;
+    private static final int MAX_RETRANSMITS = 15;
+    private static final long SESSION_IDLE_TIMEOUT_MS = 20_000L;
+    private static final long INITIAL_RTO_MS = 180L;
+    private static final long MAX_RTO_MS = 1500L;
 
     private static final byte TYPE_PUNCH = 1;
     private static final byte TYPE_PUNCH_ACK = 2;
@@ -66,8 +76,8 @@ public class UdpHolePunchService {
     private volatile DatagramSocket hostUdpSocket = null;
     private volatile HttpURLConnection hostSignalConn = null;
     private volatile ScheduledExecutorService hostScheduler = null;
+    private volatile ExecutorService punchExecutor = null;
     private final Map<Integer, PeerSession> hostSessions = new ConcurrentHashMap<>();
-    private final Map<String, Integer> addrToSessionId = new ConcurrentHashMap<>();
 
     // Client join proxy state
     private volatile boolean clientActive = false;
@@ -128,13 +138,19 @@ public class UdpHolePunchService {
                 this.hostTopic = topic;
                 this.hostActive = true;
 
+                this.punchExecutor = Executors.newFixedThreadPool(4, r -> {
+                    Thread t = new Thread(r, "FabricP2P-UDP-PunchOut");
+                    t.setDaemon(true);
+                    return t;
+                });
+
                 this.hostScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
                     Thread t = new Thread(r, "FabricP2P-UDP-Host-Timer");
                     t.setDaemon(true);
                     return t;
                 });
 
-                // Keep CGNAT UDP port mapping alive & handle retransmits
+                // Keep CGNAT UDP port mapping alive
                 this.hostScheduler.scheduleAtFixedRate(() -> {
                     if (!hostActive) return;
                     try {
@@ -142,12 +158,13 @@ public class UdpHolePunchService {
                     } catch (Exception ignored) {}
                 }, 12, 12, TimeUnit.SECONDS);
 
+                // Retransmit & idle session eviction loop
                 this.hostScheduler.scheduleAtFixedRate(() -> {
                     if (!hostActive) return;
                     for (PeerSession session : hostSessions.values()) {
-                        session.tickRetransmit();
+                        session.tickRetransmitAndTimeout();
                     }
-                }, 40, 40, TimeUnit.MILLISECONDS);
+                }, 60, 60, TimeUnit.MILLISECONDS);
 
                 // UDP receive loop
                 Thread recvThread = new Thread(() -> runHostUdpLoop(udp, localMcPort), "FabricP2P-UDP-Host-Recv");
@@ -185,6 +202,7 @@ public class UdpHolePunchService {
                         try {
                             JsonObject env = JsonParser.parseString(line).getAsJsonObject();
                             if (!"message".equals(env.has("event") ? env.get("event").getAsString() : "")) continue;
+                            if (!env.has("message") || env.get("message").isJsonNull()) continue;
                             String msgStr = env.get("message").getAsString();
                             JsonObject payload = JsonParser.parseString(msgStr).getAsJsonObject();
                             if (!"join".equals(payload.has("role") ? payload.get("role").getAsString() : "")) continue;
@@ -194,28 +212,36 @@ public class UdpHolePunchService {
                             int peerPort = payload.get("port").getAsInt();
                             int sessionId = payload.get("sid").getAsInt();
 
-                            // Reply with our fresh STUN endpoint
-                            String reply = String.format(
-                                    "{\"role\":\"host\",\"to\":\"%s\",\"ip\":\"%s\",\"port\":%d,\"sid\":%d}",
-                                    peerId, hostPublicIp, hostPublicPort, sessionId
-                            );
-                            publishSignal(topic, reply);
+                            if (peerPort < 1 || peerPort > 65535 || peerId.length() > 32) continue;
+                            InetAddress parsedIp = InetAddress.getByName(peerIp);
+                            if (parsedIp.isLoopbackAddress() || parsedIp.isMulticastAddress() || parsedIp.isAnyLocalAddress()) {
+                                continue;
+                            }
 
-                            // Actively punch toward the joiner's CGNAT endpoint
-                            InetSocketAddress peerAddr = new InetSocketAddress(InetAddress.getByName(peerIp), peerPort);
-                            addrToSessionId.put(peerIp + ":" + peerPort, sessionId);
-                            Thread punchThread = new Thread(() -> {
-                                for (int i = 0; i < 25 && hostActive; i++) {
-                                    try {
-                                        sendPacket(udp, peerAddr, TYPE_PUNCH, sessionId, 0, null, 0);
-                                        Thread.sleep(100);
-                                    } catch (Exception ignored) {
-                                        break;
+                            // Build reply safely with JsonObject
+                            JsonObject replyObj = new JsonObject();
+                            replyObj.addProperty("role", "host");
+                            replyObj.addProperty("to", peerId);
+                            replyObj.addProperty("ip", hostPublicIp);
+                            replyObj.addProperty("port", hostPublicPort);
+                            replyObj.addProperty("sid", sessionId);
+                            publishSignal(topic, replyObj.toString());
+
+                            // Actively punch toward the joiner's endpoint using bounded pool
+                            InetSocketAddress peerAddr = new InetSocketAddress(parsedIp, peerPort);
+                            ExecutorService exec = this.punchExecutor;
+                            if (exec != null && !exec.isShutdown()) {
+                                exec.submit(() -> {
+                                    for (int i = 0; i < 20 && hostActive; i++) {
+                                        try {
+                                            sendPacket(udp, peerAddr, TYPE_PUNCH, sessionId, 0, null, 0);
+                                            Thread.sleep(100);
+                                        } catch (Exception ignored) {
+                                            break;
+                                        }
                                     }
-                                }
-                            }, "FabricP2P-UDP-PunchOut");
-                            punchThread.setDaemon(true);
-                            punchThread.start();
+                                });
+                            }
                         } catch (Exception ignored) {}
                     }
                 }
@@ -255,8 +281,7 @@ public class UdpHolePunchService {
                     if (session == null && type == TYPE_DATA) {
                         session = getOrCreateHostSession(sessionId, udp, remoteAddr, localMcPort);
                     }
-                    if (session != null) {
-                        session.updateRemoteAddress(remoteAddr);
+                    if (session != null && session.acceptsRemoteAddress(remoteAddr)) {
                         handleSessionPacket(session, type, seq, buf, HEADER_SIZE, Math.min(payloadLen, len - HEADER_SIZE));
                     }
                 }
@@ -301,6 +326,10 @@ public class UdpHolePunchService {
             hostScheduler.shutdownNow();
             hostScheduler = null;
         }
+        if (punchExecutor != null) {
+            punchExecutor.shutdownNow();
+            punchExecutor = null;
+        }
         if (hostSignalConn != null) {
             try { hostSignalConn.disconnect(); } catch (Exception ignored) {}
             hostSignalConn = null;
@@ -309,7 +338,6 @@ public class UdpHolePunchService {
             s.close();
         }
         hostSessions.clear();
-        addrToSessionId.clear();
 
         if (hostUdpSocket != null) {
             try { hostUdpSocket.close(); } catch (Exception ignored) {}
@@ -345,11 +373,12 @@ public class UdpHolePunchService {
                     return new ClientProxyResult(false, -1, "STUN discovery failed on client");
                 }
 
-                // Subscribe to signaling BEFORE publishing join request
+                // Subscribe to signaling BEFORE publishing join request, synchronizing on stream open
                 CompletableFuture<InetSocketAddress> hostAddrFuture = new CompletableFuture<>();
+                CountDownLatch subscribedLatch = new CountDownLatch(1);
                 HttpURLConnection signalConn = (HttpURLConnection) URI.create(SIGNAL_BASE + topic + "/json").toURL().openConnection();
                 signalConn.setConnectTimeout(5000);
-                signalConn.setReadTimeout(8000);
+                signalConn.setReadTimeout(9000);
 
                 Thread sigReader = new Thread(() -> {
                     try (BufferedReader reader = new BufferedReader(new InputStreamReader(signalConn.getInputStream(), StandardCharsets.UTF_8))) {
@@ -358,30 +387,41 @@ public class UdpHolePunchService {
                             if (line.isBlank()) continue;
                             try {
                                 JsonObject env = JsonParser.parseString(line).getAsJsonObject();
-                                if (!"message".equals(env.has("event") ? env.get("event").getAsString() : "")) continue;
+                                String event = env.has("event") ? env.get("event").getAsString() : "";
+                                if ("open".equals(event)) {
+                                    subscribedLatch.countDown();
+                                    continue;
+                                }
+                                if (!"message".equals(event) || !env.has("message")) continue;
                                 JsonObject payload = JsonParser.parseString(env.get("message").getAsString()).getAsJsonObject();
                                 if ("host".equals(payload.has("role") ? payload.get("role").getAsString() : "")
                                         && peerId.equals(payload.has("to") ? payload.get("to").getAsString() : "")) {
                                     String hIp = payload.get("ip").getAsString();
                                     int hPort = payload.get("port").getAsInt();
-                                    hostAddrFuture.complete(new InetSocketAddress(InetAddress.getByName(hIp), hPort));
-                                    break;
+                                    if (hPort >= 1 && hPort <= 65535) {
+                                        hostAddrFuture.complete(new InetSocketAddress(InetAddress.getByName(hIp), hPort));
+                                        break;
+                                    }
                                 }
                             } catch (Exception ignored) {}
                         }
                     } catch (Exception e) {
+                        subscribedLatch.countDown();
                         hostAddrFuture.completeExceptionally(e);
                     }
                 }, "FabricP2P-UDP-ClientSignal");
                 sigReader.setDaemon(true);
                 sigReader.start();
 
-                Thread.sleep(300); // Ensure subscription is active
-                String joinMsg = String.format(
-                        "{\"role\":\"join\",\"id\":\"%s\",\"ip\":\"%s\",\"port\":%d,\"sid\":%d}",
-                        peerId, myMapped.getAddress().getHostAddress(), myMapped.getPort(), sessionId
-                );
-                publishSignal(topic, joinMsg);
+                // Wait for ntfy.sh open event (up to 2.5s) before publishing join request
+                subscribedLatch.await(2500, TimeUnit.MILLISECONDS);
+                JsonObject joinObj = new JsonObject();
+                joinObj.addProperty("role", "join");
+                joinObj.addProperty("id", peerId);
+                joinObj.addProperty("ip", myMapped.getAddress().getHostAddress());
+                joinObj.addProperty("port", myMapped.getPort());
+                joinObj.addProperty("sid", sessionId);
+                publishSignal(topic, joinObj.toString());
 
                 InetSocketAddress hostAddr;
                 try {
@@ -434,16 +474,16 @@ public class UdpHolePunchService {
                 });
                 this.clientScheduler.scheduleAtFixedRate(() -> {
                     if (clientActive && clientSession != null) {
-                        clientSession.tickRetransmit();
+                        clientSession.tickRetransmitAndTimeout();
                     }
-                }, 40, 40, TimeUnit.MILLISECONDS);
+                }, 60, 60, TimeUnit.MILLISECONDS);
                 this.clientScheduler.scheduleAtFixedRate(() -> {
                     if (clientActive && !udp.isClosed()) {
                         try {
                             sendPacket(udp, hostAddr, TYPE_KEEPALIVE, sessionId, 0, null, 0);
                         } catch (Exception ignored) {}
                     }
-                }, 8, 8, TimeUnit.SECONDS);
+                }, 6, 6, TimeUnit.SECONDS);
 
                 // Client UDP receive loop
                 Thread recvThread = new Thread(() -> {
@@ -517,6 +557,7 @@ public class UdpHolePunchService {
     // ==================== RELIABLE UDP STREAM (RUDP) ====================
 
     private static void handleSessionPacket(PeerSession session, byte type, int seq, byte[] buf, int offset, int len) {
+        session.touchActivity();
         if (type == TYPE_DATA) {
             byte[] copy = new byte[len];
             System.arraycopy(buf, offset, copy, 0, len);
@@ -534,6 +575,7 @@ public class UdpHolePunchService {
         volatile InetSocketAddress remoteAddr;
         final Runnable onClose;
         final AtomicBoolean closed = new AtomicBoolean(false);
+        volatile long lastActivityMs = System.currentTimeMillis();
 
         volatile Socket tcpSocket;
         final AtomicInteger nextSendSeq = new AtomicInteger(0);
@@ -542,6 +584,7 @@ public class UdpHolePunchService {
         final Object recvLock = new Object();
         int expectedRecvSeq = 0;
         final TreeMap<Integer, byte[]> reorderBuffer = new TreeMap<>();
+        final BlockingQueue<byte[]> tcpWriteQueue = new LinkedBlockingQueue<>(512);
 
         PeerSession(int sessionId, DatagramSocket udp, InetSocketAddress remoteAddr, Runnable onClose) {
             this.sessionId = sessionId;
@@ -550,14 +593,48 @@ public class UdpHolePunchService {
             this.onClose = onClose;
         }
 
-        void updateRemoteAddress(InetSocketAddress addr) {
-            this.remoteAddr = addr;
+        void touchActivity() {
+            this.lastActivityMs = System.currentTimeMillis();
+        }
+
+        /**
+         * Prevents session hijacking from unrelated remote IPs while allowing NAT port rebinding from the same IP.
+         */
+        boolean acceptsRemoteAddress(InetSocketAddress addr) {
+            InetSocketAddress current = this.remoteAddr;
+            if (current == null || addr == null) return false;
+            if (current.getAddress().equals(addr.getAddress())) {
+                if (current.getPort() != addr.getPort()) {
+                    this.remoteAddr = addr;
+                }
+                return true;
+            }
+            return false;
         }
 
         void attachTcpSocket(Socket tcp) {
             this.tcpSocket = tcp;
-            // Flush any data that arrived before TCP socket was ready
-            flushOrderedData();
+            drainOrderedToQueue();
+
+            // Dedicated TCP writer thread so slow local TCP writes never stall the shared host UDP recv loop
+            Thread tcpWriter = new Thread(() -> {
+                try {
+                    OutputStream out = tcp.getOutputStream();
+                    while (!closed.get() && !tcp.isClosed()) {
+                        byte[] chunk = tcpWriteQueue.poll(250, TimeUnit.MILLISECONDS);
+                        if (chunk == null) continue;
+                        out.write(chunk);
+                        while ((chunk = tcpWriteQueue.poll()) != null) {
+                            out.write(chunk);
+                        }
+                        out.flush();
+                    }
+                } catch (Exception ignored) {
+                    close();
+                }
+            }, "FabricP2P-RUDP-TcpWrite-" + sessionId);
+            tcpWriter.setDaemon(true);
+            tcpWriter.start();
 
             Thread tcpReader = new Thread(() -> {
                 byte[] buf = new byte[MAX_PAYLOAD];
@@ -589,37 +666,31 @@ public class UdpHolePunchService {
 
         void onDataReceived(int seq, byte[] data) {
             synchronized (recvLock) {
-                if (seq >= expectedRecvSeq) {
+                if (seq >= expectedRecvSeq && (seq - expectedRecvSeq) < MAX_REORDER_PACKETS
+                        && reorderBuffer.size() < MAX_REORDER_PACKETS) {
                     reorderBuffer.putIfAbsent(seq, data);
                 }
-                flushOrderedDataLocked();
+                drainOrderedToQueueLocked();
                 try {
                     sendPacket(udp, remoteAddr, TYPE_ACK, sessionId, expectedRecvSeq, null, 0);
                 } catch (Exception ignored) {}
             }
         }
 
-        void flushOrderedData() {
+        private void drainOrderedToQueue() {
             synchronized (recvLock) {
-                flushOrderedDataLocked();
+                drainOrderedToQueueLocked();
             }
         }
 
-        private void flushOrderedDataLocked() {
-            Socket tcp = this.tcpSocket;
-            if (tcp == null || tcp.isClosed()) return;
-            try {
-                OutputStream out = tcp.getOutputStream();
-                boolean wrote = false;
-                while (reorderBuffer.containsKey(expectedRecvSeq)) {
-                    byte[] chunk = reorderBuffer.remove(expectedRecvSeq);
-                    out.write(chunk);
-                    expectedRecvSeq++;
-                    wrote = true;
+        private void drainOrderedToQueueLocked() {
+            while (reorderBuffer.containsKey(expectedRecvSeq)) {
+                byte[] chunk = reorderBuffer.get(expectedRecvSeq);
+                if (!tcpWriteQueue.offer(chunk)) {
+                    break;
                 }
-                if (wrote) out.flush();
-            } catch (IOException e) {
-                close();
+                reorderBuffer.remove(expectedRecvSeq);
+                expectedRecvSeq++;
             }
         }
 
@@ -632,12 +703,26 @@ public class UdpHolePunchService {
             }
         }
 
-        void tickRetransmit() {
-            if (closed.get() || unacked.isEmpty()) return;
+        void tickRetransmitAndTimeout() {
+            if (closed.get()) return;
             long now = System.currentTimeMillis();
+            if (now - lastActivityMs > SESSION_IDLE_TIMEOUT_MS) {
+                FabricP2PMod.LOGGER.info("[P2P-UDP] Session {} timed out after inactivity.", sessionId);
+                close();
+                return;
+            }
+            if (unacked.isEmpty()) return;
+
             for (Map.Entry<Integer, SentChunk> entry : unacked.entrySet()) {
                 SentChunk chunk = entry.getValue();
-                if (now - chunk.lastSentMs >= 80) {
+                long rto = Math.min(MAX_RTO_MS, INITIAL_RTO_MS << Math.min(chunk.retries, 4));
+                if (now - chunk.lastSentMs >= rto) {
+                    if (chunk.retries >= MAX_RETRANSMITS) {
+                        FabricP2PMod.LOGGER.warn("[P2P-UDP] Session {} exceeded max retransmits — closing.", sessionId);
+                        close();
+                        return;
+                    }
+                    chunk.retries++;
                     chunk.lastSentMs = now;
                     try {
                         sendPacket(udp, remoteAddr, TYPE_DATA, sessionId, entry.getKey(), chunk.data, chunk.data.length);
@@ -652,6 +737,10 @@ public class UdpHolePunchService {
                     try { tcpSocket.close(); } catch (Exception ignored) {}
                 }
                 unacked.clear();
+                synchronized (recvLock) {
+                    reorderBuffer.clear();
+                }
+                tcpWriteQueue.clear();
                 if (onClose != null) onClose.run();
             }
         }
@@ -660,6 +749,7 @@ public class UdpHolePunchService {
     private static final class SentChunk {
         final byte[] data;
         volatile long lastSentMs;
+        volatile int retries = 0;
 
         SentChunk(byte[] data, long lastSentMs) {
             this.data = data;
@@ -686,22 +776,34 @@ public class UdpHolePunchService {
         udp.send(new DatagramPacket(bytes, bytes.length, dst));
     }
 
+    private static InetAddress resolveIpv4(String host) throws IOException {
+        for (InetAddress addr : InetAddress.getAllByName(host)) {
+            if (addr instanceof Inet4Address) {
+                return addr;
+            }
+        }
+        return InetAddress.getByName(host);
+    }
+
     public static InetSocketAddress queryStunOnSocket(DatagramSocket socket, String host, int port) {
+        int oldTimeout = 0;
+        boolean savedTimeout = false;
         try {
-            int oldTimeout = socket.getSoTimeout();
+            oldTimeout = socket.getSoTimeout();
+            savedTimeout = true;
             socket.setSoTimeout(2000);
+
             ByteBuffer req = ByteBuffer.allocate(20);
             req.putShort((short) 0x0001);
             req.putShort((short) 0x0000);
             req.putInt(0x2112A442);
             for (int i = 0; i < 3; i++) req.putInt(ThreadLocalRandom.current().nextInt());
             byte[] tx = req.array();
-            socket.send(new DatagramPacket(tx, tx.length, InetAddress.getByName(host), port));
+            socket.send(new DatagramPacket(tx, tx.length, resolveIpv4(host), port));
 
             byte[] rx = new byte[512];
             DatagramPacket rxPkt = new DatagramPacket(rx, rx.length);
             socket.receive(rxPkt);
-            socket.setSoTimeout(oldTimeout);
 
             ByteBuffer resp = ByteBuffer.wrap(rxPkt.getData(), 0, rxPkt.getLength());
             if (resp.remaining() < 20) return null;
@@ -714,7 +816,9 @@ public class UdpHolePunchService {
             while (resp.remaining() >= 4) {
                 short attrType = resp.getShort();
                 int attrLen = resp.getShort() & 0xFFFF;
+                int attrStart = resp.position();
                 if (resp.remaining() < attrLen) break;
+
                 if (attrType == 0x0020 && attrLen >= 8) {
                     resp.get();
                     byte family = resp.get();
@@ -727,12 +831,16 @@ public class UdpHolePunchService {
                         }
                         return new InetSocketAddress(InetAddress.getByAddress(ipBytes), xPort);
                     }
-                } else {
-                    int padded = (attrLen + 3) & ~3;
-                    resp.position(Math.min(resp.limit(), resp.position() + padded));
                 }
+                int padded = (attrLen + 3) & ~3;
+                resp.position(Math.min(resp.limit(), attrStart + padded));
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        } finally {
+            if (savedTimeout && !socket.isClosed()) {
+                try { socket.setSoTimeout(oldTimeout); } catch (Exception ignored) {}
+            }
+        }
         return null;
     }
 
@@ -743,7 +851,7 @@ public class UdpHolePunchService {
         req.putInt(0x2112A442);
         for (int i = 0; i < 3; i++) req.putInt(ThreadLocalRandom.current().nextInt());
         byte[] tx = req.array();
-        socket.send(new DatagramPacket(tx, tx.length, InetAddress.getByName(host), port));
+        socket.send(new DatagramPacket(tx, tx.length, resolveIpv4(host), port));
     }
 
     private static void publishSignal(String topic, String body) throws IOException {

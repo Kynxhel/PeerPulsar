@@ -16,6 +16,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /**
  * Pure-Java TCP Tunnel Relay Client (compatible with bore.pub protocol).
@@ -34,6 +35,7 @@ public class TunnelRelayService {
     private volatile int localTargetPort = -1;
     private volatile Socket controlSocket = null;
     private volatile Thread controlThread = null;
+    private volatile Consumer<String> unexpectedDisconnectHandler = null;
     private final Set<Socket> activeProxySockets = ConcurrentHashMap.newKeySet();
     private final AtomicInteger activeStreams = new AtomicInteger(0);
 
@@ -44,6 +46,10 @@ public class TunnelRelayService {
             instance = new TunnelRelayService();
         }
         return instance;
+    }
+
+    public void setUnexpectedDisconnectHandler(Consumer<String> handler) {
+        this.unexpectedDisconnectHandler = handler;
     }
 
     public boolean isActive() {
@@ -130,11 +136,13 @@ public class TunnelRelayService {
     }
 
     private void runControlLoop(Socket ctrl, int localPort) {
+        String dropReason = null;
         try {
             InputStream in = ctrl.getInputStream();
             while (active && !ctrl.isClosed()) {
                 String frame = readJsonFrame(in);
                 if (frame == null) {
+                    dropReason = "Relay closed control stream";
                     break;
                 }
                 if (frame.equals("\"Heartbeat\"")) {
@@ -157,11 +165,21 @@ public class TunnelRelayService {
             }
         } catch (IOException e) {
             if (active) {
+                dropReason = e.getMessage();
                 FabricP2PMod.LOGGER.warn("[P2P-Tunnel] Control connection closed: {}", e.getMessage());
             }
         } finally {
+            boolean wasUnexpected = active && (this.controlSocket == ctrl);
             if (this.controlSocket == ctrl) {
                 this.active = false;
+                this.controlSocket = null;
+            }
+            closeQuietly(ctrl);
+            if (wasUnexpected) {
+                Consumer<String> handler = this.unexpectedDisconnectHandler;
+                if (handler != null) {
+                    handler.accept(dropReason != null ? dropReason : "Tunnel relay disconnected");
+                }
             }
         }
     }
@@ -170,11 +188,14 @@ public class TunnelRelayService {
         Thread proxyThread = new Thread(() -> {
             Socket remoteSock = null;
             Socket localSock = null;
+            boolean streamCounted = false;
             try {
                 remoteSock = new Socket();
                 remoteSock.connect(new InetSocketAddress(RELAY_HOST, RELAY_CONTROL_PORT), 5000);
                 remoteSock.setTcpNoDelay(true);
-                sendJsonFrame(remoteSock.getOutputStream(), "{\"Accept\":\"" + uuid + "\"}");
+                JsonObject acceptObj = new JsonObject();
+                acceptObj.addProperty("Accept", uuid);
+                sendJsonFrame(remoteSock.getOutputStream(), acceptObj.toString());
 
                 localSock = new Socket();
                 localSock.connect(new InetSocketAddress("127.0.0.1", localPort), 3000);
@@ -183,6 +204,7 @@ public class TunnelRelayService {
                 activeProxySockets.add(remoteSock);
                 activeProxySockets.add(localSock);
                 activeStreams.incrementAndGet();
+                streamCounted = true;
 
                 final Socket rSock = remoteSock;
                 final Socket lSock = localSock;
@@ -196,7 +218,9 @@ public class TunnelRelayService {
             } catch (Exception e) {
                 FabricP2PMod.LOGGER.debug("[P2P-Tunnel] Proxy stream ended ({}): {}", uuid, e.getMessage());
             } finally {
-                activeStreams.decrementAndGet();
+                if (streamCounted) {
+                    activeStreams.decrementAndGet();
+                }
                 closeQuietly(remoteSock);
                 closeQuietly(localSock);
                 if (remoteSock != null) activeProxySockets.remove(remoteSock);
@@ -217,8 +241,13 @@ public class TunnelRelayService {
                 out.write(buffer, 0, read);
                 out.flush();
             }
+            // Half-close destination output so remaining opposite-direction packets (e.g. kick reason) still flush
+            try {
+                if (!to.isClosed() && !to.isOutputShutdown()) {
+                    to.shutdownOutput();
+                }
+            } catch (IOException ignored) {}
         } catch (IOException ignored) {
-        } finally {
             closeQuietly(from);
             closeQuietly(to);
         }

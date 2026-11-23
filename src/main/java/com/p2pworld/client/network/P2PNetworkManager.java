@@ -57,13 +57,33 @@ public class P2PNetworkManager {
     private volatile boolean allowCheats = false;
     private volatile boolean useDefaultPort = true;
 
-    private P2PNetworkManager() {}
+    private P2PNetworkManager() {
+        TunnelRelayService.getInstance().setUnexpectedDisconnectHandler(this::onTunnelDroppedUnexpectedly);
+    }
 
     public static synchronized P2PNetworkManager getInstance() {
         if (instance == null) {
             instance = new P2PNetworkManager();
         }
         return instance;
+    }
+
+    private void onTunnelDroppedUnexpectedly(String reason) {
+        if (!p2pActive || activeHostingMode != ActiveHostingMode.TUNNEL_RELAY) {
+            return;
+        }
+        FabricP2PMod.LOGGER.warn("[P2P-26.3] Tunnel Relay disconnected unexpectedly: {}", reason);
+        Minecraft client = Minecraft.getInstance();
+        if (client != null) {
+            client.execute(() -> {
+                stopP2PHost(client);
+                if (client.player != null) {
+                    client.player.sendSystemMessage(Component.literal(
+                            "§c⚠ [FabricP2P] §fTunnel Relay connection dropped (" + reason + "). Start P2P again to reconnect."
+                    ));
+                }
+            });
+        }
     }
 
     public boolean isP2PActive() {
@@ -159,6 +179,13 @@ public class P2PNetworkManager {
 
     public void setSelectedGameType(GameType selectedGameType) {
         this.selectedGameType = selectedGameType;
+        if (this.p2pActive) {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc != null && mc.getSingleplayerServer() != null) {
+                IntegratedServer server = mc.getSingleplayerServer();
+                server.execute(() -> server.setDefaultGameType(selectedGameType));
+            }
+        }
     }
 
     public boolean isAllowCheats() {
@@ -199,9 +226,15 @@ public class P2PNetworkManager {
     }
 
     /**
-     * Starts the IntegratedServer as a P2P hosted world, triggers UPnP and computes room code.
+     * Starts the IntegratedServer as a P2P hosted world, triggers UPnP/UDP/Tunnel and computes room code.
      */
-    public void startP2PHost(Minecraft client, GameType gameType, boolean cheats, int port, boolean offlineMode, Consumer<Boolean> callback) {
+    public synchronized void startP2PHost(Minecraft client, GameType gameType, boolean cheats, int port, boolean offlineMode, Consumer<Boolean> callback) {
+        if (this.starting || this.p2pActive) {
+            this.lastErrorMessage = "P2P host is already starting or active.";
+            callback.accept(false);
+            return;
+        }
+
         this.selectedGameType = gameType;
         this.allowCheats = cheats;
         this.hostedPort = port;
@@ -239,13 +272,15 @@ public class P2PNetworkManager {
                 FabricP2PMod.LOGGER.info("[P2P-26.3] Publishing integrated server on local port {} (OfflineLAN: {}, GameMode: {}, NetMode: {})...",
                         port, offlineMode, gameType, mode);
 
-                // 2. Publish IntegratedServer on client thread and wait for result
+                // 2. Publish IntegratedServer on client thread (unpublishing first if already published on another port)
                 CompletableFuture<Boolean> publishFuture = new CompletableFuture<>();
                 client.execute(() -> {
                     try {
+                        if (server.isPublished()) {
+                            server.unpublishServer();
+                        }
                         server.setDefaultGameType(gameType);
-                        boolean published = server.isPublished()
-                                || server.publishServer(MinecraftServer.MultiplayerScope.LAN, cheats, port);
+                        boolean published = server.publishServer(MinecraftServer.MultiplayerScope.LAN, cheats, port);
                         publishFuture.complete(published);
                     } catch (Throwable t) {
                         publishFuture.completeExceptionally(t);
@@ -368,6 +403,13 @@ public class P2PNetworkManager {
         if (!p2pActive && !starting) return;
 
         FabricP2PMod.LOGGER.info("[P2P-26.3] Stopping P2P host and cleaning up UPnP/UDP/Tunnel...");
+        this.p2pActive = false;
+        this.starting = false;
+        this.activeHostingMode = ActiveHostingMode.NONE;
+        this.hostedPublicHost = null;
+        this.hostedPublicPort = -1;
+        this.hostedRoomCode = null;
+
         UPnPService.getInstance().closePortAsync();
         TunnelRelayService.getInstance().stopTunnel();
         UdpHolePunchService.getInstance().stopHost();
@@ -386,13 +428,6 @@ public class P2PNetworkManager {
                 client.player.sendSystemMessage(Component.literal("§c■ [FabricP2P] §fP2P hosting stopped and network resources cleared."));
             }
         }
-
-        this.p2pActive = false;
-        this.starting = false;
-        this.activeHostingMode = ActiveHostingMode.NONE;
-        this.hostedPublicHost = null;
-        this.hostedPublicPort = -1;
-        this.hostedRoomCode = null;
     }
 
     /**
@@ -403,15 +438,15 @@ public class P2PNetworkManager {
         SharedWorldManager.getInstance().onP2PHostStopped(Minecraft.getInstance());
         if (p2pActive || starting) {
             FabricP2PMod.LOGGER.info("[P2P-26.3] World disconnected — auto-cleaning UPnP, UDP & Tunnel.");
-            UPnPService.getInstance().closePortAsync();
-            TunnelRelayService.getInstance().stopTunnel();
-            UdpHolePunchService.getInstance().stopHost();
             this.p2pActive = false;
             this.starting = false;
             this.activeHostingMode = ActiveHostingMode.NONE;
             this.hostedPublicHost = null;
             this.hostedPublicPort = -1;
             this.hostedRoomCode = null;
+            UPnPService.getInstance().closePortAsync();
+            TunnelRelayService.getInstance().stopTunnel();
+            UdpHolePunchService.getInstance().stopHost();
         }
     }
 

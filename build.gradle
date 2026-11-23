@@ -16,44 +16,48 @@ repositories {
 }
 
 dependencies {
-    // Minecraft 26.3 (Unobfuscated native)
+    // Minecraft 26.3 (Unobfuscated native, Java 25 bytecode)
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    
+
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 }
 
+def resolvedModVersion = project.version.toString()
+def resolvedArchivesName = project.base.archivesName.get()
+def localPropsSource = layout.projectDirectory.file("local.properties").asFile
+
 processResources {
-    inputs.property "version", project.version
-    filteringCharset "UTF-8"
+    inputs.property "version", resolvedModVersion
+    inputs.file(localPropsSource).optional()
+    filteringCharset = "UTF-8"
 
     filesMatching("fabric.mod.json") {
-        expand "version": project.version
+        expand "version": resolvedModVersion
     }
 
     doLast {
-        def localPropsFile = file("local.properties")
-        if (localPropsFile.exists()) {
-            def outFile = file("${destinationDir}/assets/fabricp2p/oauth.properties")
+        if (localPropsSource.exists()) {
+            def outFile = new File(destinationDir, "assets/fabricp2p/oauth.properties")
             outFile.parentFile.mkdirs()
-            outFile.text = localPropsFile.text
+            outFile.text = localPropsSource.text
         }
     }
 }
 
 tasks.withType(JavaCompile).configureEach {
     it.options.encoding = "UTF-8"
-    it.options.release = 21
+    it.options.release = 25
 }
 
 java {
     withSourcesJar()
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
 }
 
 jar {
     from("LICENSE") {
-        rename { "${it}_${project.base.archivesName.get()}"}
+        rename { "${it}_${resolvedArchivesName}" }
     }
 }

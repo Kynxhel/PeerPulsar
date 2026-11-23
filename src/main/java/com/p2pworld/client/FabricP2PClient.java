@@ -2,12 +2,16 @@ package com.p2pworld.client;
 
 import com.p2pworld.FabricP2PMod;
 import com.p2pworld.client.network.P2PNetworkManager;
+import com.p2pworld.client.shared.GoogleAuthService;
 import com.p2pworld.client.shared.SharedWorldConfig;
+import com.p2pworld.client.shared.SharedWorldManager;
 import com.p2pworld.network.P2PIdentityPayloads;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.network.chat.Component;
+
+import java.util.concurrent.CompletableFuture;
 
 public class FabricP2PClient implements ClientModInitializer {
     @Override
@@ -15,30 +19,41 @@ public class FabricP2PClient implements ClientModInitializer {
         FabricP2PMod.LOGGER.info("[FabricP2P-Client] Neon P2P Engine initialized (MC 26.3).");
         P2PNetworkManager.getInstance();
 
-        // Send our Google identity to the Host on join (for anti-spoof nickname protection & auto Drive share)
+        // Send our Google-signed OIDC id_token to the Host on join (refreshed async so render thread never blocks)
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
-            String email = SharedWorldConfig.getInstance().getGoogleUserEmail();
-            if (ClientPlayNetworking.canSend(P2PIdentityPayloads.GoogleIdentityC2SPayload.TYPE)) {
-                ClientPlayNetworking.send(new P2PIdentityPayloads.GoogleIdentityC2SPayload(email != null ? email : ""));
+            if (!ClientPlayNetworking.canSend(P2PIdentityPayloads.GoogleIdentityC2SPayload.TYPE)) {
+                return;
             }
+            if (!SharedWorldConfig.getInstance().isGoogleSignedIn()) {
+                ClientPlayNetworking.send(new P2PIdentityPayloads.GoogleIdentityC2SPayload(""));
+                return;
+            }
+            CompletableFuture.supplyAsync(() -> GoogleAuthService.getInstance().getValidIdToken())
+                    .thenAccept(idToken -> client.execute(() -> {
+                        if (client.getConnection() != null
+                                && ClientPlayNetworking.canSend(P2PIdentityPayloads.GoogleIdentityC2SPayload.TYPE)) {
+                            ClientPlayNetworking.send(new P2PIdentityPayloads.GoogleIdentityC2SPayload(
+                                    idToken != null ? idToken : ""
+                            ));
+                        }
+                    }));
         });
 
-        // Receive auto-shared Google Drive folder ID from Host and save it seamlessly
+        // Receive auto-shared per-world Google Drive folder ID from Host without overwriting user's own root folder
         ClientPlayNetworking.registerGlobalReceiver(
                 P2PIdentityPayloads.SharedWorldGrantS2CPayload.TYPE,
                 (payload, context) -> {
                     context.client().execute(() -> {
                         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
-                        if (payload.driveFolderId() != null && !payload.driveFolderId().isBlank()) {
-                            cfg.setGoogleDriveFolderId(payload.driveFolderId());
-                            cfg.setLastSharedWorldName(payload.worldName());
-                            if (!cfg.isEnabled()) {
-                                cfg.setEnabled(true);
-                            }
+                        String folderId = payload.worldFolderId() != null ? payload.worldFolderId().trim() : "";
+                        String safeName = SharedWorldManager.sanitizeName(payload.worldName());
+                        if (!folderId.isBlank() && folderId.matches("^[a-zA-Z0-9_-]{8,128}$") && !safeName.isEmpty()) {
+                            cfg.putLinkedDriveWorld(safeName, folderId);
+                            cfg.setLastSharedWorldName(safeName);
                             if (context.client().player != null) {
                                 context.client().player.sendSystemMessage(Component.literal(
-                                        "§b☁ [FabricP2P] §aAuto-linked to Shared Google Drive World '§f"
-                                                + payload.worldName() + "§a'! You can host it anytime from Shared Worlds."
+                                        "§b☁ [FabricP2P] §aLinked Shared Drive World '§f" + safeName
+                                                + "§a'! Open §bShared Worlds§a to view or host it."
                                 ));
                             }
                         }

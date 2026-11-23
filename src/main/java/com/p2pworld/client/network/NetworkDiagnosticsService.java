@@ -4,15 +4,11 @@ import com.p2pworld.FabricP2PMod;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
-import java.net.InetAddress;
 import java.net.URI;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Diagnoses the host's internet connection, NAT/CGNAT status, UPnP capability,
@@ -25,6 +21,7 @@ public class NetworkDiagnosticsService {
     private volatile P2PCompatibilityStatus status = P2PCompatibilityStatus.IDLE;
     private volatile DiagnosticReport lastReport = DiagnosticReport.empty();
     private volatile long lastCheckMs = 0;
+    private volatile CompletableFuture<DiagnosticReport> inFlightCheck = null;
 
     private static final String[] IP_ENDPOINTS = {
             "https://api.ipify.org",
@@ -84,17 +81,21 @@ public class NetworkDiagnosticsService {
                 && lastReport.tunnelAvailable();
     }
 
-    public CompletableFuture<DiagnosticReport> runDiagnosticsAsync() {
-        if (status == P2PCompatibilityStatus.TESTING) {
-            return CompletableFuture.completedFuture(lastReport);
+    /**
+     * Runs diagnostics asynchronously. If a diagnostic run is already in progress,
+     * returns the in-flight CompletableFuture so callers wait for the actual result.
+     */
+    public synchronized CompletableFuture<DiagnosticReport> runDiagnosticsAsync() {
+        if (status == P2PCompatibilityStatus.TESTING && inFlightCheck != null && !inFlightCheck.isDone()) {
+            return inFlightCheck;
         }
 
         this.status = P2PCompatibilityStatus.TESTING;
 
-        return CompletableFuture.supplyAsync(() -> {
+        CompletableFuture<DiagnosticReport> future = CompletableFuture.supplyAsync(() -> {
             FabricP2PMod.LOGGER.info("[P2P-Diag] Starting internet, NAT (Dual-STUN), UPnP & Tunnel diagnostics...");
 
-            // 1. Dual-STUN check on the SAME UDP socket to detect Public IP + Cone NAT vs Symmetric NAT
+            // 1. Dual-STUN check on the SAME UDP socket (IPv4) to detect Public IP + Cone NAT vs Symmetric NAT
             String publicIp = null;
             boolean coneNatSupported = false;
             try (DatagramSocket stunSock = new DatagramSocket()) {
@@ -177,6 +178,16 @@ public class NetworkDiagnosticsService {
             );
             return report;
         });
+
+        this.inFlightCheck = future;
+        future.whenComplete((r, err) -> {
+            synchronized (NetworkDiagnosticsService.this) {
+                if (this.inFlightCheck == future) {
+                    this.inFlightCheck = null;
+                }
+            }
+        });
+        return future;
     }
 
     /**
@@ -196,58 +207,6 @@ public class NetworkDiagnosticsService {
             if (a == 127 || a == 0) return true;              // Loopback / unspecified
         } catch (NumberFormatException ignored) {}
         return false;
-    }
-
-    private static String queryStunPublicIp(String host, int port) {
-        try (DatagramSocket socket = new DatagramSocket()) {
-            socket.setSoTimeout(1800);
-            ByteBuffer req = ByteBuffer.allocate(20);
-            req.putShort((short) 0x0001); // Binding Request
-            req.putShort((short) 0x0000); // Length
-            req.putInt(0x2112A442);       // RFC 5389 Magic Cookie
-            for (int i = 0; i < 3; i++) {
-                req.putInt(ThreadLocalRandom.current().nextInt());
-            }
-
-            byte[] tx = req.array();
-            socket.send(new DatagramPacket(tx, tx.length, InetAddress.getByName(host), port));
-
-            byte[] rx = new byte[512];
-            DatagramPacket rxPacket = new DatagramPacket(rx, rx.length);
-            socket.receive(rxPacket);
-
-            ByteBuffer resp = ByteBuffer.wrap(rxPacket.getData(), 0, rxPacket.getLength());
-            if (resp.remaining() < 20) return null;
-            short msgType = resp.getShort();
-            resp.getShort(); // length
-            int cookie = resp.getInt();
-            if (msgType != (short) 0x0101 || cookie != 0x2112A442) return null;
-
-            resp.position(20);
-            while (resp.remaining() >= 4) {
-                short attrType = resp.getShort();
-                int attrLen = resp.getShort() & 0xFFFF;
-                if (resp.remaining() < attrLen) break;
-
-                if (attrType == 0x0020 && attrLen >= 8) { // XOR-MAPPED-ADDRESS
-                    resp.get(); // reserved
-                    byte family = resp.get();
-                    resp.getShort(); // xor port
-                    if (family == 0x01) { // IPv4
-                        byte[] ipBytes = new byte[4];
-                        resp.get(ipBytes);
-                        for (int i = 0; i < 4; i++) {
-                            ipBytes[i] = (byte) (ipBytes[i] ^ ((0x2112A442 >> (24 - i * 8)) & 0xFF));
-                        }
-                        return InetAddress.getByAddress(ipBytes).getHostAddress();
-                    }
-                } else {
-                    int padded = (attrLen + 3) & ~3;
-                    resp.position(Math.min(resp.limit(), resp.position() + padded));
-                }
-            }
-        } catch (Exception ignored) {}
-        return null;
     }
 
     private static String queryHttpsPublicIp() {

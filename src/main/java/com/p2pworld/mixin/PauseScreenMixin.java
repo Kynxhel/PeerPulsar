@@ -24,17 +24,23 @@ public abstract class PauseScreenMixin extends Screen {
     private void onInit(CallbackInfo ci) {
         if (this.minecraft == null || !this.minecraft.hasSingleplayerServer()) return;
 
-        AbstractWidget lanButton = null;
-        Component shareToLanText = Component.translatable("menu.shareToLan");
+        AbstractWidget anchorButton = null;
+        AbstractWidget bottomMostButton = null;
+        String worldOptionsStr = Component.translatable("options.worldOptions.button").getString();
+        String shareToLanStr = Component.translatable("menu.shareToLan").getString();
 
         for (var child : this.children()) {
             if (child instanceof AbstractWidget widget) {
+                if (bottomMostButton == null || widget.getY() > bottomMostButton.getY()) {
+                    bottomMostButton = widget;
+                }
                 String msg = widget.getMessage().getString();
-                if (msg.equals(shareToLanText.getString())
+                if (msg.equals(worldOptionsStr)
+                        || msg.equals(shareToLanStr)
+                        || msg.equalsIgnoreCase("World Options...")
                         || msg.equalsIgnoreCase("Open to LAN")
                         || msg.equalsIgnoreCase("Yerel Ağda Paylaş")) {
-                    lanButton = widget;
-                    break;
+                    anchorButton = widget;
                 }
             }
         }
@@ -45,27 +51,29 @@ public abstract class PauseScreenMixin extends Screen {
                 : Component.literal("✦ ").append(Component.translatable("menu.fabricp2p.start_p2p")).withStyle(ChatFormatting.BOLD);
         int accent = isP2PActive ? NeonTheme.EMERALD : NeonTheme.CYAN;
 
-        if (lanButton != null) {
-            int originalX = lanButton.getX();
-            int originalY = lanButton.getY();
-            lanButton.setWidth(98);
-
-            NeonButton p2pButton = new NeonButton(
-                    originalX + 104, originalY, 100, 20,
-                    p2pText, accent,
-                    () -> this.minecraft.setScreenAndShow(new P2PHostScreen(this))
-            ).setPulsingBeacon(isP2PActive);
-
-            this.addRenderableWidget(p2pButton);
-        } else {
-            int centerX = this.width / 2;
-            NeonButton p2pButton = new NeonButton(
-                    centerX - 102, 10, 204, 20,
-                    p2pText, accent,
-                    () -> this.minecraft.setScreenAndShow(new P2PHostScreen(this))
-            ).setPulsingBeacon(isP2PActive);
-
-            this.addRenderableWidget(p2pButton);
+        if (anchorButton != null) {
+            int btnW = 98;
+            int rightX = anchorButton.getX() + anchorButton.getWidth() + 6;
+            if (rightX + btnW <= this.width - 4) {
+                NeonButton p2pButton = new NeonButton(
+                        rightX, anchorButton.getY(), btnW, anchorButton.getHeight(),
+                        p2pText, accent,
+                        () -> this.minecraft.setScreenAndShow(new P2PHostScreen(this))
+                ).setPulsingBeacon(isP2PActive);
+                this.addRenderableWidget(p2pButton);
+                return;
+            }
         }
+
+        int centerX = this.width / 2;
+        int fallbackY = bottomMostButton != null
+                ? Math.min(this.height - 26, bottomMostButton.getY() + bottomMostButton.getHeight() + 6)
+                : Math.max(36, this.height - 28);
+        NeonButton p2pButton = new NeonButton(
+                centerX - 102, fallbackY, 204, 20,
+                p2pText, accent,
+                () -> this.minecraft.setScreenAndShow(new P2PHostScreen(this))
+        ).setPulsingBeacon(isP2PActive);
+        this.addRenderableWidget(p2pButton);
     }
 }

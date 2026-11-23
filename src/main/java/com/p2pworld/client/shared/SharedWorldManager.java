@@ -6,6 +6,7 @@ import com.p2pworld.FabricP2PMod;
 import com.p2pworld.client.network.P2PNetworkManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.server.IntegratedServer;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.IOException;
@@ -17,10 +18,13 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -47,6 +51,7 @@ public class SharedWorldManager {
     private volatile String activeModeName = null;
     private volatile boolean syncing = false;
     private volatile ScheduledExecutorService heartbeatExec = null;
+    private final Set<String> knownDriveWorldNames = ConcurrentHashMap.newKeySet();
 
     private SharedWorldManager() {}
 
@@ -66,7 +71,44 @@ public class SharedWorldManager {
     }
 
     /**
+     * Checks whether the given server's world is registered as a Shared Cloud World.
+     */
+    public boolean isCurrentWorldShared(MinecraftServer server) {
+        if (server == null) return false;
+        SharedWorldConfig cfg = SharedWorldConfig.getInstance();
+        if (!cfg.isEnabled()) return false;
+        String worldName = sanitizeName(server.getWorldPath(LevelResource.ROOT).normalize().getFileName().toString());
+        if (worldName.equals(activeHostedWorldName)) return true;
+        if (worldName.equals(cfg.getLastSharedWorldName())) return true;
+        if (cfg.getLinkedDriveFolderId(worldName) != null) return true;
+        if (knownDriveWorldNames.contains(worldName)) return true;
+        if (cfg.hasValidSyncFolder()) {
+            Path sharedDir = Path.of(cfg.getSyncFolderPath()).resolve(worldName).normalize();
+            return Files.exists(sharedDir);
+        }
+        return false;
+    }
+
+    /**
+     * Resolves (or creates) the Drive folder ID for a specific shared world, respecting individually linked worlds.
+     */
+    public String resolveWorldDriveFolderId(String worldName, boolean createIfMissing) throws IOException {
+        String safeName = sanitizeName(worldName);
+        SharedWorldConfig cfg = SharedWorldConfig.getInstance();
+        String linkedId = cfg.getLinkedDriveFolderId(safeName);
+        if (linkedId != null && !linkedId.isBlank()) {
+            return linkedId;
+        }
+        GoogleDriveService drive = GoogleDriveService.getInstance();
+        String rootId = drive.getOrCreateRootFolderId();
+        return createIfMissing
+                ? drive.getOrCreateSubfolder(rootId, safeName)
+                : drive.findSubfolder(rootId, safeName);
+    }
+
+    /**
      * Scans either Google Drive (when signed in) or the configured local sync folder for shared worlds.
+     * NOTE: May perform network I/O — call from a background thread!
      */
     public List<SharedWorldEntry> listSharedWorlds() {
         List<SharedWorldEntry> results = new ArrayList<>();
@@ -79,26 +121,52 @@ public class SharedWorldManager {
             try {
                 GoogleDriveService drive = GoogleDriveService.getInstance();
                 String rootId = drive.getOrCreateRootFolderId();
+                Map<String, String> worldFolders = new LinkedHashMap<>();
+
                 for (GoogleDriveService.DriveItem folder : drive.listSubfolders(rootId)) {
-                    String metaJson = drive.readTextFile(folder.id(), META_FILE);
-                    String lockJson = drive.readTextFile(folder.id(), LOCK_FILE);
-                    WorldMeta meta = metaJson != null ? GSON.fromJson(metaJson, WorldMeta.class) : null;
-                    SessionLock lock = lockJson != null ? GSON.fromJson(lockJson, SessionLock.class) : null;
+                    String safeName = sanitizeName(folder.name());
+                    if (!safeName.isEmpty()) {
+                        worldFolders.put(safeName, folder.id());
+                    }
+                }
+                for (Map.Entry<String, String> linked : cfg.getLinkedDriveWorlds().entrySet()) {
+                    String safeName = sanitizeName(linked.getKey());
+                    if (!safeName.isEmpty()) {
+                        worldFolders.putIfAbsent(safeName, linked.getValue());
+                    }
+                }
 
-                    int rev = (meta != null) ? meta.revision : 1;
-                    String lastHost = (meta != null && meta.lastHost != null) ? meta.lastHost : "Google Drive";
-                    long updatedAt = (meta != null) ? meta.updatedAtMs : 0L;
-                    boolean live = lock != null && lock.active && lock.roomCode != null && !lock.roomCode.isBlank()
-                            && (System.currentTimeMillis() - lock.heartbeatMs) < STALE_LOCK_MS;
+                knownDriveWorldNames.clear();
+                knownDriveWorldNames.addAll(worldFolders.keySet());
 
-                    results.add(new SharedWorldEntry(
-                            folder.name(), rev, lastHost, updatedAt, true,
-                            live, live ? lock.hostName : null, live ? lock.roomCode : null, live ? lock.connectionMode : null
-                    ));
+                for (Map.Entry<String, String> wf : worldFolders.entrySet()) {
+                    String worldName = wf.getKey();
+                    String folderId = wf.getValue();
+                    try {
+                        String metaJson = drive.readTextFile(folderId, META_FILE);
+                        String lockJson = drive.readTextFile(folderId, LOCK_FILE);
+                        WorldMeta meta = parseJson(metaJson, WorldMeta.class);
+                        SessionLock lock = parseJson(lockJson, SessionLock.class);
+
+                        int rev = (meta != null) ? meta.revision : 1;
+                        String lastHost = (meta != null && meta.lastHost != null) ? meta.lastHost : "Google Drive";
+                        long updatedAt = (meta != null) ? meta.updatedAtMs : 0L;
+                        boolean live = lock != null && lock.active && lock.roomCode != null && !lock.roomCode.isBlank()
+                                && (System.currentTimeMillis() - lock.heartbeatMs) < STALE_LOCK_MS;
+
+                        results.add(new SharedWorldEntry(
+                                worldName, rev, lastHost, updatedAt, true,
+                                live, live ? lock.hostName : null, live ? lock.roomCode : null, live ? lock.connectionMode : null
+                        ));
+                    } catch (Exception e) {
+                        FabricP2PMod.LOGGER.warn("[SharedWorlds] Skipping Drive world '{}': {}", worldName, e.getMessage());
+                    }
                 }
             } catch (Exception e) {
                 FabricP2PMod.LOGGER.warn("[SharedWorlds] Google Drive list error: {}", e.getMessage());
             }
+
+            sortWorldEntries(results);
             return results;
         }
 
@@ -117,7 +185,9 @@ public class SharedWorldManager {
                     return;
                 }
 
-                String worldName = dir.getFileName().toString();
+                String worldName = sanitizeName(dir.getFileName().toString());
+                if (worldName.isEmpty()) return;
+
                 WorldMeta meta = readJson(metaPath, WorldMeta.class);
                 SessionLock lock = readJson(lockPath, SessionLock.class);
 
@@ -147,9 +217,13 @@ public class SharedWorldManager {
             FabricP2PMod.LOGGER.warn("[SharedWorlds] Failed to list shared worlds: {}", e.getMessage());
         }
 
+        sortWorldEntries(results);
+        return results;
+    }
+
+    private static void sortWorldEntries(List<SharedWorldEntry> results) {
         results.sort(Comparator.comparing(SharedWorldEntry::live).reversed()
                 .thenComparing(SharedWorldEntry::updatedAtMs, Comparator.reverseOrder()));
-        return results;
     }
 
     /**
@@ -188,7 +262,8 @@ public class SharedWorldManager {
     }
 
     /**
-     * Incrementally pulls ONLY missing or modified files into .minecraft/saves/<worldName>.
+     * Incrementally pulls ONLY missing or modified files into .minecraft/saves/<worldName>,
+     * and cleans up files removed in the latest revision.
      */
     public CompletableFuture<SyncOpResult> pullWorldToLocalSavesAsync(Minecraft mc, String worldName) {
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
@@ -196,19 +271,28 @@ public class SharedWorldManager {
             return CompletableFuture.completedFuture(new SyncOpResult(false, "Sign in with Google or set a Sync Folder first."));
         }
 
+        String safeName = sanitizeName(worldName);
+        if (safeName.isEmpty()) {
+            return CompletableFuture.completedFuture(new SyncOpResult(false, "Invalid world name."));
+        }
+
         return CompletableFuture.supplyAsync(() -> {
             this.syncing = true;
             try {
-                Path targetWorldDir = mc.gameDirectory.toPath().resolve("saves").resolve(worldName).normalize();
+                Path savesRoot = mc.gameDirectory.toPath().resolve("saves").toAbsolutePath().normalize();
+                Path targetWorldDir = savesRoot.resolve(safeName).normalize();
+                if (!targetWorldDir.startsWith(savesRoot) || targetWorldDir.equals(savesRoot)) {
+                    return new SyncOpResult(false, "Unsafe target world path rejected.");
+                }
                 Files.createDirectories(targetWorldDir);
 
                 if (cfg.isGoogleSignedIn() && !cfg.hasValidSyncFolder()) {
-                    return pullIncrementalFromGoogleDrive(worldName, targetWorldDir);
+                    return pullIncrementalFromGoogleDrive(safeName, targetWorldDir);
                 } else {
-                    return pullIncrementalFromLocalFolder(cfg.getSyncFolderPath(), worldName, targetWorldDir);
+                    return pullIncrementalFromLocalFolder(cfg.getSyncFolderPath(), safeName, targetWorldDir);
                 }
             } catch (Exception e) {
-                FabricP2PMod.LOGGER.error("[SharedWorlds] Incremental pull failed for '{}': {}", worldName, e.getMessage());
+                FabricP2PMod.LOGGER.error("[SharedWorlds] Incremental pull failed for '{}': {}", safeName, e.getMessage());
                 return new SyncOpResult(false, "Pull failed: " + e.getMessage());
             } finally {
                 this.syncing = false;
@@ -222,12 +306,12 @@ public class SharedWorldManager {
         this.syncing = true;
         try {
             GoogleDriveService drive = GoogleDriveService.getInstance();
-            String rootId = drive.getOrCreateRootFolderId();
-            String worldFolderId = drive.getOrCreateSubfolder(rootId, worldName);
+            String worldFolderId = resolveWorldDriveFolderId(worldName, true);
             String filesFolderId = drive.getOrCreateSubfolder(worldFolderId, FILES_SUBDIR);
 
             String oldManifestJson = drive.readTextFile(worldFolderId, MANIFEST_FILE);
-            WorldManifest oldManifest = oldManifestJson != null ? GSON.fromJson(oldManifestJson, WorldManifest.class) : new WorldManifest();
+            WorldManifest oldManifest = parseJson(oldManifestJson, WorldManifest.class);
+            if (oldManifest == null) oldManifest = new WorldManifest();
             if (oldManifest.files == null) oldManifest.files = new LinkedHashMap<>();
 
             WorldManifest newManifest = new WorldManifest();
@@ -246,7 +330,6 @@ public class SharedWorldManager {
 
                 ManifestFile prev = oldManifest.files.get(rel);
                 if (prev != null && sha.equals(prev.sha256) && prev.driveFileId != null && !prev.driveFileId.isBlank()) {
-                    // Unchanged file -> SKIP (0 bytes uploaded!)
                     newManifest.files.put(rel, prev);
                     skipped++;
                 } else {
@@ -277,6 +360,7 @@ public class SharedWorldManager {
             meta.updatedAtMs = newManifest.updatedAtMs;
             drive.uploadTextFile(worldFolderId, META_FILE, GSON.toJson(meta));
 
+            knownDriveWorldNames.add(worldName);
             SharedWorldConfig.getInstance().setLastSharedWorldName(worldName);
             FabricP2PMod.LOGGER.info("[SharedWorlds] Drive incremental sync '{}' Rev #{}: {} uploaded, {} skipped.",
                     worldName, newManifest.revision, uploaded, skipped);
@@ -290,11 +374,13 @@ public class SharedWorldManager {
 
     private SyncOpResult pullIncrementalFromGoogleDrive(String worldName, Path targetWorldDir) throws IOException {
         GoogleDriveService drive = GoogleDriveService.getInstance();
-        String rootId = drive.getOrCreateRootFolderId();
-        String worldFolderId = drive.getOrCreateSubfolder(rootId, worldName);
+        String worldFolderId = resolveWorldDriveFolderId(worldName, false);
+        if (worldFolderId == null || worldFolderId.isBlank()) {
+            return new SyncOpResult(false, "World folder '" + worldName + "' not found on Google Drive.");
+        }
 
         String lockJson = drive.readTextFile(worldFolderId, LOCK_FILE);
-        SessionLock lock = lockJson != null ? GSON.fromJson(lockJson, SessionLock.class) : null;
+        SessionLock lock = parseJson(lockJson, SessionLock.class);
         if (lock != null && lock.active && (System.currentTimeMillis() - lock.heartbeatMs) < STALE_LOCK_MS) {
             return new SyncOpResult(false, "World is currently hosted by " + lock.hostName + "! Join them instead.");
         }
@@ -303,20 +389,24 @@ public class SharedWorldManager {
         if (manifestJson == null) {
             return new SyncOpResult(false, "No manifest found on Google Drive for '" + worldName + "'.");
         }
-        WorldManifest manifest = GSON.fromJson(manifestJson, WorldManifest.class);
+        WorldManifest manifest = parseJson(manifestJson, WorldManifest.class);
         if (manifest == null || manifest.files == null) {
             return new SyncOpResult(false, "Corrupt manifest on Google Drive.");
         }
 
         int downloaded = 0;
         int skipped = 0;
+        int failed = 0;
         Path normalizedRoot = targetWorldDir.toAbsolutePath().normalize();
+        Set<Path> expectedFiles = new HashSet<>();
 
         for (Map.Entry<String, ManifestFile> entry : manifest.files.entrySet()) {
             String rel = entry.getKey();
             ManifestFile mf = entry.getValue();
+            if (rel == null || mf == null) continue;
             Path dest = normalizedRoot.resolve(rel).normalize();
-            if (!dest.startsWith(normalizedRoot)) continue;
+            if (!dest.startsWith(normalizedRoot) || dest.equals(normalizedRoot)) continue;
+            expectedFiles.add(dest);
 
             if (Files.exists(dest) && mf.sha256 != null && mf.sha256.equals(sha256(dest))) {
                 skipped++;
@@ -324,9 +414,17 @@ public class SharedWorldManager {
             }
             if (drive.downloadFileById(mf.driveFileId, dest)) {
                 downloaded++;
+            } else {
+                failed++;
+                FabricP2PMod.LOGGER.warn("[SharedWorlds] Failed to download '{}' (id={})", rel, mf.driveFileId);
             }
         }
 
+        if (failed > 0) {
+            return new SyncOpResult(false, "Incomplete pull: " + failed + " file(s) failed to download.");
+        }
+
+        pruneRemovedLocalFiles(normalizedRoot, expectedFiles);
         SharedWorldConfig.getInstance().setLastSharedWorldName(worldName);
         return new SyncOpResult(true, "Pulled Rev #" + manifest.revision + ": " + downloaded + " updated, " + skipped + " already up to date!");
     }
@@ -337,8 +435,12 @@ public class SharedWorldManager {
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
         this.syncing = true;
         try {
-            Path sharedDir = Path.of(cfg.getSyncFolderPath()).resolve(worldName);
-            Path filesRoot = sharedDir.resolve(FILES_SUBDIR);
+            Path syncRoot = Path.of(cfg.getSyncFolderPath()).toAbsolutePath().normalize();
+            Path sharedDir = syncRoot.resolve(worldName).normalize();
+            if (!sharedDir.startsWith(syncRoot) || sharedDir.equals(syncRoot)) {
+                return new SyncOpResult(false, "Invalid world name for sync folder.");
+            }
+            Path filesRoot = sharedDir.resolve(FILES_SUBDIR).normalize();
             Files.createDirectories(filesRoot);
 
             Path manifestPath = sharedDir.resolve(MANIFEST_FILE);
@@ -360,6 +462,8 @@ public class SharedWorldManager {
                 long size = Files.size(p);
 
                 Path sharedCopy = filesRoot.resolve(rel).normalize();
+                if (!sharedCopy.startsWith(filesRoot) || sharedCopy.equals(filesRoot)) continue;
+
                 ManifestFile prev = oldManifest.files.get(rel);
                 if (prev != null && sha.equals(prev.sha256) && Files.exists(sharedCopy)) {
                     newManifest.files.put(rel, prev);
@@ -375,10 +479,13 @@ public class SharedWorldManager {
                 }
             }
 
-            // Clean up removed files
+            // Clean up removed files safely inside filesRoot
             for (String oldRel : oldManifest.files.keySet()) {
                 if (!newManifest.files.containsKey(oldRel)) {
-                    try { Files.deleteIfExists(filesRoot.resolve(oldRel).normalize()); } catch (IOException ignored) {}
+                    Path oldFile = filesRoot.resolve(oldRel).normalize();
+                    if (oldFile.startsWith(filesRoot) && !oldFile.equals(filesRoot)) {
+                        try { Files.deleteIfExists(oldFile); } catch (IOException ignored) {}
+                    }
                 }
             }
 
@@ -407,7 +514,11 @@ public class SharedWorldManager {
     }
 
     private SyncOpResult pullIncrementalFromLocalFolder(String syncFolder, String worldName, Path targetWorldDir) throws IOException {
-        Path sharedDir = Path.of(syncFolder).resolve(worldName);
+        Path syncRoot = Path.of(syncFolder).toAbsolutePath().normalize();
+        Path sharedDir = syncRoot.resolve(worldName).normalize();
+        if (!sharedDir.startsWith(syncRoot) || sharedDir.equals(syncRoot)) {
+            return new SyncOpResult(false, "Invalid world path.");
+        }
         SessionLock lock = readJson(sharedDir.resolve(LOCK_FILE), SessionLock.class);
         if (lock != null && lock.active && (System.currentTimeMillis() - lock.heartbeatMs) < STALE_LOCK_MS) {
             return new SyncOpResult(false, "World is currently hosted by " + lock.hostName + "! Join them instead.");
@@ -418,17 +529,25 @@ public class SharedWorldManager {
             return new SyncOpResult(false, "No manifest found in shared folder for '" + worldName + "'.");
         }
 
-        Path filesRoot = sharedDir.resolve(FILES_SUBDIR);
+        Path filesRoot = sharedDir.resolve(FILES_SUBDIR).normalize();
         Path normalizedRoot = targetWorldDir.toAbsolutePath().normalize();
         int copied = 0;
         int skipped = 0;
+        int missing = 0;
+        Set<Path> expectedFiles = new HashSet<>();
 
         for (Map.Entry<String, ManifestFile> entry : manifest.files.entrySet()) {
             String rel = entry.getKey();
             ManifestFile mf = entry.getValue();
+            if (rel == null || mf == null) continue;
             Path src = filesRoot.resolve(rel).normalize();
             Path dest = normalizedRoot.resolve(rel).normalize();
-            if (!dest.startsWith(normalizedRoot) || !Files.exists(src)) continue;
+            if (!src.startsWith(filesRoot) || !dest.startsWith(normalizedRoot) || dest.equals(normalizedRoot)) continue;
+            if (!Files.exists(src)) {
+                missing++;
+                continue;
+            }
+            expectedFiles.add(dest);
 
             if (Files.exists(dest) && mf.sha256 != null && mf.sha256.equals(sha256(dest))) {
                 skipped++;
@@ -439,8 +558,26 @@ public class SharedWorldManager {
             copied++;
         }
 
+        if (missing > 0) {
+            return new SyncOpResult(false, "Incomplete pull: " + missing + " file(s) missing in sync folder.");
+        }
+
+        pruneRemovedLocalFiles(normalizedRoot, expectedFiles);
         SharedWorldConfig.getInstance().setLastSharedWorldName(worldName);
         return new SyncOpResult(true, "Pulled Rev #" + manifest.revision + ": " + copied + " updated, " + skipped + " already up to date!");
+    }
+
+    private static void pruneRemovedLocalFiles(Path normalizedRoot, Set<Path> expectedFiles) {
+        try {
+            for (Path existing : collectWorldFiles(normalizedRoot)) {
+                Path norm = existing.toAbsolutePath().normalize();
+                if (!expectedFiles.contains(norm) && norm.startsWith(normalizedRoot)) {
+                    try {
+                        Files.deleteIfExists(norm);
+                    } catch (IOException ignored) {}
+                }
+            }
+        } catch (IOException ignored) {}
     }
 
     // ==================== LIVE LOCK & HEARTBEAT ====================
@@ -463,8 +600,20 @@ public class SharedWorldManager {
             if (!Files.exists(sharedDir) && !worldName.equals(cfg.getLastSharedWorldName())) {
                 return;
             }
-        } else if (!worldName.equals(cfg.getLastSharedWorldName())) {
-            return;
+        } else {
+            boolean matchesKnown = worldName.equals(cfg.getLastSharedWorldName())
+                    || cfg.getLinkedDriveFolderId(worldName) != null
+                    || knownDriveWorldNames.contains(worldName);
+            if (!matchesKnown) {
+                try {
+                    if (resolveWorldDriveFolderId(worldName, false) == null) {
+                        return;
+                    }
+                    knownDriveWorldNames.add(worldName);
+                } catch (Exception e) {
+                    return;
+                }
+            }
         }
 
         this.activeHostedWorldName = worldName;
@@ -507,9 +656,31 @@ public class SharedWorldManager {
         boolean useDrive = cfg.isGoogleSignedIn() && !cfg.hasValidSyncFolder();
         String hostName = (mc != null && mc.getUser() != null) ? mc.getUser().getName() : "Host";
 
-        CompletableFuture.runAsync(() -> {
+        // Trigger world flush if server is still running (e.g. clicking "Stop P2P Host" in-game)
+        IntegratedServer runningServer = (mc != null) ? mc.getSingleplayerServer() : null;
+        CompletableFuture<Void> saveReady = new CompletableFuture<>();
+        if (runningServer != null && runningServer.isRunning()) {
+            runningServer.execute(() -> {
+                try {
+                    runningServer.saveEverything(true, true, true);
+                } catch (Throwable ignored) {
+                } finally {
+                    saveReady.complete(null);
+                }
+            });
+        } else {
+            saveReady.complete(null);
+        }
+
+        // Use a non-daemon worker thread so closing Minecraft right after disconnecting still completes sync & lock release
+        Thread exitSyncThread = new Thread(() -> {
             try {
-                Thread.sleep(1200);
+                try {
+                    saveReady.get(4, TimeUnit.SECONDS);
+                } catch (Exception ignored) {}
+                if (runningServer == null) {
+                    Thread.sleep(1500);
+                }
                 if (cfg.isAutoSyncOnExit() && worldDir != null && Files.exists(worldDir)) {
                     if (useDrive) {
                         uploadIncrementalToGoogleDrive(worldDir, worldName, hostName);
@@ -526,14 +697,15 @@ public class SharedWorldManager {
                     writeSessionLock(Path.of(cfg.getSyncFolderPath()).resolve(worldName), false, hostName, "", "", worldName);
                 }
             }
-        });
+        }, "FabricP2P-SharedWorld-ExitSync");
+        exitSyncThread.setDaemon(false);
+        exitSyncThread.start();
     }
 
     private void writeDriveSessionLock(String worldName, boolean active, String hostName, String roomCode, String mode) {
         try {
             GoogleDriveService drive = GoogleDriveService.getInstance();
-            String rootId = drive.getOrCreateRootFolderId();
-            String worldFolderId = drive.getOrCreateSubfolder(rootId, worldName);
+            String worldFolderId = resolveWorldDriveFolderId(worldName, true);
             SessionLock lock = new SessionLock();
             lock.active = active;
             lock.hostName = hostName;
@@ -542,7 +714,9 @@ public class SharedWorldManager {
             lock.worldName = worldName;
             lock.heartbeatMs = System.currentTimeMillis();
             drive.uploadTextFile(worldFolderId, LOCK_FILE, GSON.toJson(lock));
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            FabricP2PMod.LOGGER.warn("[SharedWorlds] Failed to update Drive session lock: {}", e.getMessage());
+        }
     }
 
     private void writeSessionLock(Path sharedDir, boolean active, String hostName, String roomCode, String mode, String worldName) {
@@ -609,14 +783,31 @@ public class SharedWorldManager {
     private static <T> T readJson(Path path, Class<T> clazz) {
         if (!Files.exists(path)) return null;
         try {
-            return GSON.fromJson(Files.readString(path, StandardCharsets.UTF_8), clazz);
+            return parseJson(Files.readString(path, StandardCharsets.UTF_8), clazz);
         } catch (Exception e) {
             return null;
         }
     }
 
-    private static String sanitizeName(String name) {
-        return name.replaceAll("[^a-zA-Z0-9._ -]", "_").trim();
+    private static <T> T parseJson(String json, Class<T> clazz) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            return GSON.fromJson(json, clazz);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public static String sanitizeName(String name) {
+        if (name == null) return "";
+        String cleaned = name.replaceAll("[^a-zA-Z0-9._ -]", "_").trim();
+        while (cleaned.startsWith(".") || cleaned.endsWith(".") || cleaned.endsWith(" ")) {
+            cleaned = cleaned.replaceAll("^\\.+|[. ]+$", "").trim();
+        }
+        if (cleaned.equals("..") || cleaned.equals(".")) {
+            return "";
+        }
+        return cleaned;
     }
 
     private static final class WorldMeta {
