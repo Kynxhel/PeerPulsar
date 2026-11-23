@@ -1,5 +1,8 @@
 # Changelog
 
+## v2.1.13+26.3
+- **Sync-Before-Quit Screen (`ExitSyncScreen`):** Intercepted **Esc → Save and Quit to Title** via `MinecraftMixin` whenever playing a Shared Cloud World with **Auto-Sync on Exit** enabled — saves and incrementally uploads changed files to Google Drive / Sync Folder first with a live progress screen (plus Retry / Skip options if offline), then automatically exits to the Title Screen and releases the session lock without duplicate uploads.
+
 ## v2.1.12+26.3
 - **Fix Cross-User Google Drive Shared World Sync:** Upgraded the optional Google Drive OAuth scope from `drive.file` to `https://www.googleapis.com/auth/drive` so invited friends can read `meta.json`, `session.lock.json` (`● LIVE`), `manifest.json`, and world files inside shared world folders created by another player (resolving `"No manifest found on Google Drive"` for non-owner players), bounded `listSharedWithMeFolders()` to the 25 most recently modified shared folders, and updated `PRIVACY.md`.
 

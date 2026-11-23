@@ -152,5 +152,13 @@
   "screen.fabricp2p.shared.badge_on": "ON",
   "screen.fabricp2p.shared.badge_off": "OFF",
   "screen.fabricp2p.shared.status_live": "● LIVE — Hosted by %s • Rev #%s",
-  "screen.fabricp2p.shared.status_standby": "○ STANDBY — Last host: %s • Rev #%s"
+  "screen.fabricp2p.shared.status_standby": "○ STANDBY — Last host: %s • Rev #%s",
+  "screen.fabricp2p.exitsync.title": "Syncing Shared World",
+  "screen.fabricp2p.exitsync.heading": "☁ UPLOADING SHARED WORLD...",
+  "screen.fabricp2p.exitsync.uploading": "Saving & syncing changed files to cloud before exiting...",
+  "screen.fabricp2p.exitsync.hint": "Please wait — you will return to the title screen automatically.",
+  "screen.fabricp2p.exitsync.failed_title": "⚠ CLOUD SYNC FAILED",
+  "screen.fabricp2p.exitsync.btn_retry": "⟳ Retry Upload",
+  "screen.fabricp2p.exitsync.btn_skip": "Skip & Quit",
+  "screen.fabricp2p.exitsync.btn_quit_anyway": "Quit Without Syncing"
 }

@@ -8,6 +8,7 @@
     "ServerLoginPacketListenerImplMixin",
     "ServerGamePacketListenerImplMixin",
     "IntegratedServerMixin",
+    "MinecraftMixin",
     "PauseScreenMixin",
     "TitleScreenMixin",
     "JoinMultiplayerScreenMixin"

@@ -76,6 +76,7 @@ public class SharedWorldManager {
     private volatile ScheduledExecutorService heartbeatExec = null;
     private final Set<String> knownDriveWorldNames = ConcurrentHashMap.newKeySet();
     private final Set<String> activeExitSyncSessions = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean skipNextExitAutoSync = new AtomicBoolean(false);
 
     private SharedWorldManager() {}
 
@@ -101,6 +102,14 @@ public class SharedWorldManager {
 
     public String getActiveHostedWorldName() {
         return activeHostedWorldName;
+    }
+
+    /**
+     * Marks that the world was just uploaded synchronously on the ExitSyncScreen before disconnecting,
+     * so onP2PHostStopped() only releases session.lock.json without performing a duplicate upload.
+     */
+    public void suppressNextExitAutoSync() {
+        skipNextExitAutoSync.set(true);
     }
 
     /**
@@ -982,6 +991,7 @@ public class SharedWorldManager {
             stoppedHeartbeat = stopHeartbeat();
         }
 
+        final boolean skipUpload = skipNextExitAutoSync.getAndSet(false);
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
         if (worldName == null || !cfg.isEnabled()
                 || (useDrive && !cfg.isGoogleSignedIn())
@@ -1037,7 +1047,7 @@ public class SharedWorldManager {
                 // Wait for any in-flight heartbeat to terminate before syncing or releasing lock
                 awaitHeartbeatTermination(stoppedHeartbeat);
 
-                if (cfg.isAutoSyncOnExit() && worldDir != null && Files.exists(worldDir)) {
+                if (!skipUpload && cfg.isAutoSyncOnExit() && worldDir != null && Files.exists(worldDir)) {
                     // Renew session.lock.json (active=true, roomCode="") while exit upload runs so large worlds don't expire the 45s lock
                     exitLockRenewer = Executors.newSingleThreadScheduledExecutor(r -> {
                         Thread t = new Thread(r, "FabricP2P-ExitLock-Renew");
