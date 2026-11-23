@@ -3,10 +3,10 @@
   "minVersion": "0.8",
   "package": "com.p2pworld.mixin",
   "compatibilityLevel": "JAVA_25",
-  "mixins": [
-    "ServerLoginPacketListenerImplMixin"
-  ],
+  "mixins": [],
   "client": [
+    "ServerLoginPacketListenerImplMixin",
+    "ServerGamePacketListenerImplMixin",
     "IntegratedServerMixin",
     "PauseScreenMixin",
     "TitleScreenMixin",

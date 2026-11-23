@@ -197,11 +197,15 @@ public class UdpHolePunchService {
 
     private void runHostSignalLoop(String topic, DatagramSocket udp) {
         while (hostActive) {
+            HttpURLConnection conn = null;
             try {
-                HttpURLConnection conn = (HttpURLConnection) URI.create(SIGNAL_BASE + topic + "/json").toURL().openConnection();
+                conn = (HttpURLConnection) URI.create(SIGNAL_BASE + topic + "/json").toURL().openConnection();
                 conn.setConnectTimeout(6000);
                 conn.setReadTimeout(0);
                 this.hostSignalConn = conn;
+                if (!hostActive) {
+                    break;
+                }
 
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                     String line;
@@ -257,6 +261,10 @@ public class UdpHolePunchService {
                 if (hostActive) {
                     try { Thread.sleep(2000); } catch (InterruptedException ignored) { break; }
                 }
+            } finally {
+                if (conn != null) {
+                    try { conn.disconnect(); } catch (Exception ignored) {}
+                }
             }
         }
     }
@@ -286,7 +294,7 @@ public class UdpHolePunchService {
                     getOrCreateHostSession(sessionId, udp, remoteAddr, localMcPort);
                 } else {
                     PeerSession session = hostSessions.get(sessionId);
-                    if (session == null && type == TYPE_DATA) {
+                    if (session == null && type == TYPE_DATA && seq == 0) {
                         session = getOrCreateHostSession(sessionId, udp, remoteAddr, localMcPort);
                     }
                     if (session != null && session.acceptsRemoteAddress(remoteAddr)) {

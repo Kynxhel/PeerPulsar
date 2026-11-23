@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.1.3+26.3
+- **Shared Worlds Sync Safety & Drive Fixes:** Committed updated `manifest.json` and `meta.json` before deleting obsolete remote/local files to prevent broken sync states on interrupted uploads, and scoped Google Drive root folder lookup to `'root' in parents`.
+- **IdentityGuard Hardening:** Added per-player OIDC verification deduplication (`tryBeginVerification`), atomic writes for `fabricp2p_identities.json`, and blocked item drops, inventory manipulation, chat, and commands while a bound player is pending verification (`ServerGamePacketListenerImplMixin`).
+- **UDP Hole Punching & Room Code Fixes:** Prevented late `TYPE_DATA` packets from resurrecting closed host sessions (`seq == 0`), hardened `runHostSignalLoop` shutdown against start/stop races, and preserved hostnames (e.g. `bore.pub`) via Base64 without blocking DNS in `RoomCodeHelper.encodeRoomCode`.
+- **UI & Packaging Polish:** Locked all settings/mode cards immediately on `Start P2P` in `P2PHostScreen`, added `pingGeneration` tracking in `P2PJoinScreen` to discard stale ping results, moved server login/game mixins into the `client` array in `fabricp2p.mixins.json`, and added unit tests for hostname room codes and `PlayerIdentityGuard`.
+
 ## v2.1.2+26.3
 - **UDP Hole Punching & RUDP Reliability:** Fixed `DatagramSocket` / `ServerSocket` leaks on signaling or startup errors in `UdpHolePunchService`, and added redundant `TYPE_FIN` transmission on disconnect so peers detect stream closure without waiting for idle timeout.
 - **OIDC Verification & Sync Concurrency:** Increased `PlayerIdentityGuard` OIDC verification timeout from 6s to 15s to prevent false kicks during token refresh, and replaced `syncInProgress` with an atomic active-operation counter in `SharedWorldManager` so exit-sync never clears an in-flight manual sync lock.

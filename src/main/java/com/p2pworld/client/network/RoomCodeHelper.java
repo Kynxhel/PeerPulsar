@@ -26,8 +26,13 @@ public class RoomCodeHelper {
             return "";
         }
         try {
-            // Only pack into compact 6-byte XOR hex if input is already an IPv4 literal or resolves to IPv4
-            InetAddress address = InetAddress.getByName(ip);
+            // Only pack into compact 6-byte XOR hex when input is a literal IPv4 address (avoid blocking DNS & preserve hostnames)
+            if (!NetworkDiagnosticsService.isIpv4Literal(ip)) {
+                String combined = formatHostPort(ip, port);
+                return PREFIX + Base64.getUrlEncoder().withoutPadding()
+                        .encodeToString(combined.getBytes(StandardCharsets.UTF_8));
+            }
+            InetAddress address = InetAddress.ofLiteral(ip);
             byte[] ipBytes = address.getAddress();
             if (!(address instanceof Inet4Address) || ipBytes.length != 4) {
                 String combined = formatHostPort(ip, port);

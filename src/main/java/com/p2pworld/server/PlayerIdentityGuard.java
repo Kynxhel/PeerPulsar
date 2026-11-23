@@ -13,12 +13,14 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.LevelResource;
 
+import java.io.IOException;
 import java.lang.reflect.Type;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.Locale;
 import java.util.Map;
@@ -55,6 +57,7 @@ public final class PlayerIdentityGuard {
     private static final AtomicLong JOIN_SEQ = new AtomicLong(0);
     private static final Map<UUID, Long> activeJoinToken = new ConcurrentHashMap<>();
     private static final Set<UUID> verifiedThisSession = ConcurrentHashMap.newKeySet();
+    private static final Set<UUID> verificationInFlight = ConcurrentHashMap.newKeySet();
     private static final Map<UUID, PendingAnchor> pendingVerification = new ConcurrentHashMap<>();
 
     private PlayerIdentityGuard() {}
@@ -76,6 +79,23 @@ public final class PlayerIdentityGuard {
      */
     public static boolean isPendingVerification(UUID uuid) {
         return uuid != null && pendingVerification.containsKey(uuid);
+    }
+
+    /**
+     * Prevents duplicate/spam GoogleIdentityC2SPayload verification requests from an already-verified
+     * or currently verifying player.
+     */
+    public static boolean tryBeginVerification(UUID uuid) {
+        if (uuid == null || verifiedThisSession.contains(uuid)) {
+            return false;
+        }
+        return verificationInFlight.add(uuid);
+    }
+
+    public static void endVerificationAttempt(UUID uuid) {
+        if (uuid != null) {
+            verificationInFlight.remove(uuid);
+        }
     }
 
     /**
@@ -138,6 +158,7 @@ public final class PlayerIdentityGuard {
         if (server == null || player == null) return;
         UUID uuid = player.getUUID();
         verifiedThisSession.remove(uuid);
+        verificationInFlight.remove(uuid);
         pendingVerification.remove(uuid);
         long joinToken = JOIN_SEQ.incrementAndGet();
         activeJoinToken.put(uuid, joinToken);
@@ -259,12 +280,14 @@ public final class PlayerIdentityGuard {
     public static void onPlayerDisconnect(UUID uuid) {
         if (uuid == null) return;
         verifiedThisSession.remove(uuid);
+        verificationInFlight.remove(uuid);
         activeJoinToken.remove(uuid);
         pendingVerification.remove(uuid);
     }
 
     public static void onServerStopped() {
         verifiedThisSession.clear();
+        verificationInFlight.clear();
         activeJoinToken.clear();
         pendingVerification.clear();
     }
@@ -301,11 +324,23 @@ public final class PlayerIdentityGuard {
     }
 
     private static synchronized void saveBindings(MinecraftServer server, Map<String, String> bindings) {
+        Path file = server.getWorldPath(LevelResource.ROOT).resolve(IDENTITY_FILE);
+        Path tmp = file.resolveSibling(IDENTITY_FILE + ".p2p.tmp");
+        boolean moved = false;
         try {
-            Path file = server.getWorldPath(LevelResource.ROOT).resolve(IDENTITY_FILE);
-            Files.writeString(file, GSON.toJson(bindings), StandardCharsets.UTF_8);
+            Files.writeString(tmp, GSON.toJson(bindings), StandardCharsets.UTF_8);
+            try {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException atomicFallback) {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+            }
+            moved = true;
         } catch (Exception e) {
             FabricP2PMod.LOGGER.warn("[IdentityGuard] Failed to save identity bindings: {}", e.getMessage());
+        } finally {
+            if (!moved) {
+                try { Files.deleteIfExists(tmp); } catch (IOException ignored) {}
+            }
         }
     }
 }

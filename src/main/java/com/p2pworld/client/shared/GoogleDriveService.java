@@ -463,6 +463,8 @@ public class GoogleDriveService {
         String q = "name = '" + escapeQuery(name) + "' and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
         if (parentId != null) {
             q += " and '" + escapeQuery(parentId) + "' in parents";
+        } else {
+            q += " and 'root' in parents";
         }
         List<DriveItem> items = queryFiles(token, q);
         return items.isEmpty() ? null : items.get(0).id();

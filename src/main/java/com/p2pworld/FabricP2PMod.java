@@ -106,53 +106,72 @@ public class FabricP2PMod implements ModInitializer {
                     MinecraftServer server = context.server();
                     String idToken = payload.idToken();
 
+                    if (!PlayerIdentityGuard.tryBeginVerification(playerUuid)) {
+                        return;
+                    }
+
                     // Verify OIDC id_token asynchronously with Google's tokeninfo endpoint (never trust raw client claims)
                     CompletableFuture.supplyAsync(() -> GoogleAuthService.verifyIdTokenWithGoogle(idToken))
-                            .thenAccept(verified -> server.execute(() -> {
-                                ServerPlayer player = server.getPlayerList().getPlayer(playerUuid);
-                                if (player == null || player != joiningPlayer) return;
-
-                                boolean allowed = PlayerIdentityGuard.verifyAndBind(player, verified, server);
-                                if (!allowed || verified == null) {
-                                    return;
-                                }
-
-                                // Auto-share ONLY the current world's Drive subfolder (never the entire root folder),
-                                // and ONLY when the hosted world is actually a registered Shared World!
-                                SharedWorldConfig cfg = SharedWorldConfig.getInstance();
-                                SharedWorldManager sharedMgr = SharedWorldManager.getInstance();
-                                if (cfg.isEnabled() && cfg.isGoogleSignedIn() && sharedMgr.isCurrentWorldShared(server)) {
-                                    // Don't re-share with ourselves
-                                    if (verified.email().equalsIgnoreCase(cfg.getGoogleUserEmail())) {
+                            .whenComplete((verified, err) -> {
+                                try {
+                                    if (err != null) {
+                                        PlayerIdentityGuard.endVerificationAttempt(playerUuid);
+                                        LOGGER.warn("[IdentityGuard] Unexpected error verifying OIDC token: {}", err.getMessage());
                                         return;
                                     }
-                                    String rawWorldName = server.getWorldPath(LevelResource.ROOT).normalize().getFileName().toString();
-                                    String worldName = SharedWorldManager.sanitizeName(rawWorldName);
-                                    if (worldName.isEmpty()) return;
-
-                                    CompletableFuture.runAsync(() -> {
+                                    server.execute(() -> {
                                         try {
-                                            String worldFolderId = sharedMgr.resolveWorldDriveFolderId(worldName, false);
-                                            if (worldFolderId == null || worldFolderId.isBlank()) {
+                                            ServerPlayer player = server.getPlayerList().getPlayer(playerUuid);
+                                            if (player == null || player != joiningPlayer) return;
+
+                                            boolean allowed = PlayerIdentityGuard.verifyAndBind(player, verified, server);
+                                            if (!allowed || verified == null) {
                                                 return;
                                             }
-                                            boolean shared = GoogleDriveService.getInstance()
-                                                    .shareFolderWithEmail(worldFolderId, verified.email());
-                                            if (shared && server.isRunning()) {
-                                                server.execute(() -> {
-                                                    ServerPlayer target = server.getPlayerList().getPlayer(playerUuid);
-                                                    if (target != null) {
-                                                        ServerPlayNetworking.send(target,
-                                                                new P2PIdentityPayloads.SharedWorldGrantS2CPayload(worldFolderId, worldName));
+
+                                            // Auto-share ONLY the current world's Drive subfolder (never the entire root folder),
+                                            // and ONLY when the hosted world is actually a registered Shared World!
+                                            SharedWorldConfig cfg = SharedWorldConfig.getInstance();
+                                            SharedWorldManager sharedMgr = SharedWorldManager.getInstance();
+                                            if (cfg.isEnabled() && cfg.isGoogleSignedIn() && sharedMgr.isCurrentWorldShared(server)) {
+                                                // Don't re-share with ourselves
+                                                if (verified.email().equalsIgnoreCase(cfg.getGoogleUserEmail())) {
+                                                    return;
+                                                }
+                                                String rawWorldName = server.getWorldPath(LevelResource.ROOT).normalize().getFileName().toString();
+                                                String worldName = SharedWorldManager.sanitizeName(rawWorldName);
+                                                if (worldName.isEmpty()) return;
+
+                                                CompletableFuture.runAsync(() -> {
+                                                    try {
+                                                        String worldFolderId = sharedMgr.resolveWorldDriveFolderId(worldName, false);
+                                                        if (worldFolderId == null || worldFolderId.isBlank()) {
+                                                            return;
+                                                        }
+                                                        boolean shared = GoogleDriveService.getInstance()
+                                                                .shareFolderWithEmail(worldFolderId, verified.email());
+                                                        if (shared && server.isRunning()) {
+                                                            server.execute(() -> {
+                                                                ServerPlayer target = server.getPlayerList().getPlayer(playerUuid);
+                                                                if (target != null) {
+                                                                    ServerPlayNetworking.send(target,
+                                                                            new P2PIdentityPayloads.SharedWorldGrantS2CPayload(worldFolderId, worldName));
+                                                                }
+                                                            });
+                                                        }
+                                                    } catch (Exception e) {
+                                                        LOGGER.warn("[SharedWorlds] Auto-share with {} failed: {}", verified.email(), e.getMessage());
                                                     }
                                                 });
                                             }
-                                        } catch (Exception e) {
-                                            LOGGER.warn("[SharedWorlds] Auto-share with {} failed: {}", verified.email(), e.getMessage());
+                                        } finally {
+                                            PlayerIdentityGuard.endVerificationAttempt(playerUuid);
                                         }
                                     });
+                                } catch (Throwable t) {
+                                    PlayerIdentityGuard.endVerificationAttempt(playerUuid);
                                 }
-                            }));
+                            });
                 }
         );
     }

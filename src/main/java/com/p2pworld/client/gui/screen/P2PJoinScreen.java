@@ -17,11 +17,13 @@ import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.network.chat.Component;
 
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class P2PJoinScreen extends Screen {
     private final Screen parent;
     private final ParticleBackground particleBg = new ParticleBackground();
     private final long openTimeMs = System.currentTimeMillis();
+    private final AtomicInteger pingGeneration = new AtomicInteger(0);
 
     private EditBox inputField;
     private NeonButton pasteButton;
@@ -131,6 +133,8 @@ public class P2PJoinScreen extends Screen {
     private void onInputChanged(String text) {
         this.savedInputText = text != null ? text : "";
         this.parsedTarget = RoomCodeHelper.parseInput(this.savedInputText);
+        this.pingGeneration.incrementAndGet();
+        this.isTesting = false;
         this.lastPingResult = null;
         syncButtonStates();
     }
@@ -167,6 +171,7 @@ public class P2PJoinScreen extends Screen {
         if (this.parsedTarget == null || this.parsedTarget.isUdpHolePunch() || this.minecraft == null || this.isTesting) return;
         RoomCodeHelper.ConnectionTarget target = this.parsedTarget;
 
+        int gen = this.pingGeneration.incrementAndGet();
         this.isTesting = true;
         this.activeOpTargetLabel = RoomCodeHelper.formatHostPort(target.host(), target.port());
         this.lastPingResult = null;
@@ -175,6 +180,7 @@ public class P2PJoinScreen extends Screen {
         P2PNetworkManager.getInstance().pingTarget(target.host(), target.port()).whenComplete((res, err) -> {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
+                if (!this.screenActive || this.pingGeneration.get() != gen) return;
                 this.isTesting = false;
                 if (err != null || res == null) {
                     String reason = extractErrorMessage(err);

@@ -455,6 +455,7 @@ public class P2PHostScreen extends Screen {
                     }
                 }
         );
+        updateWidgetStates();
     }
 
     private void updateWidgetStates() {

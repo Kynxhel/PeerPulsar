@@ -445,13 +445,6 @@ public class SharedWorldManager {
                 }
             }
 
-            // Delete files removed on host
-            for (Map.Entry<String, ManifestFile> oldEntry : oldManifest.files.entrySet()) {
-                if (!newManifest.files.containsKey(oldEntry.getKey()) && oldEntry.getValue() != null) {
-                    drive.deleteFileById(oldEntry.getValue().driveFileId);
-                }
-            }
-
             drive.uploadTextFile(worldFolderId, MANIFEST_FILE, GSON.toJson(newManifest));
 
             WorldMeta meta = new WorldMeta();
@@ -460,6 +453,13 @@ public class SharedWorldManager {
             meta.lastHost = hostName;
             meta.updatedAtMs = newManifest.updatedAtMs;
             drive.uploadTextFile(worldFolderId, META_FILE, GSON.toJson(meta));
+
+            // Delete files removed on host only AFTER the new manifest is safely committed
+            for (Map.Entry<String, ManifestFile> oldEntry : oldManifest.files.entrySet()) {
+                if (!newManifest.files.containsKey(oldEntry.getKey()) && oldEntry.getValue() != null) {
+                    drive.deleteFileById(oldEntry.getValue().driveFileId);
+                }
+            }
 
             knownDriveWorldNames.add(worldName);
             SharedWorldConfig.getInstance().setLastSharedWorldName(worldName);
@@ -586,16 +586,6 @@ public class SharedWorldManager {
                 }
             }
 
-            // Clean up removed files safely inside filesRoot
-            for (String oldRel : oldManifest.files.keySet()) {
-                if (!newManifest.files.containsKey(oldRel)) {
-                    Path oldFile = filesRoot.resolve(oldRel).normalize();
-                    if (oldFile.startsWith(filesRoot) && !oldFile.equals(filesRoot)) {
-                        try { Files.deleteIfExists(oldFile); } catch (IOException ignored) {}
-                    }
-                }
-            }
-
             writeBytesAtomically(GSON.toJson(newManifest).getBytes(StandardCharsets.UTF_8), manifestPath);
 
             WorldMeta meta = new WorldMeta();
@@ -604,6 +594,16 @@ public class SharedWorldManager {
             meta.lastHost = hostName;
             meta.updatedAtMs = newManifest.updatedAtMs;
             writeBytesAtomically(GSON.toJson(meta).getBytes(StandardCharsets.UTF_8), sharedDir.resolve(META_FILE));
+
+            // Clean up removed files safely inside filesRoot only AFTER the new manifest is committed
+            for (String oldRel : oldManifest.files.keySet()) {
+                if (!newManifest.files.containsKey(oldRel)) {
+                    Path oldFile = filesRoot.resolve(oldRel).normalize();
+                    if (oldFile.startsWith(filesRoot) && !oldFile.equals(filesRoot)) {
+                        try { Files.deleteIfExists(oldFile); } catch (IOException ignored) {}
+                    }
+                }
+            }
 
             cfg.setLastSharedWorldName(worldName);
             if (!preserveLockIfActive) {

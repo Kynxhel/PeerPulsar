@@ -71,6 +71,25 @@ class RoomCodeHelperTest {
     }
 
     @Test
+    void hostnameEncodeAndDecodePreservesHostnameWithoutDns() {
+        String code = RoomCodeHelper.encodeRoomCode("bore.pub", 41234);
+        assertTrue(code.startsWith("P2P-"), "Expected P2P- prefix, got: " + code);
+        RoomCodeHelper.ConnectionTarget target = RoomCodeHelper.decodeRoomCode(code);
+        assertNotNull(target);
+        assertEquals("bore.pub", target.host());
+        assertEquals(41234, target.port());
+        assertFalse(target.isUdpHolePunch());
+
+        // Non-resolvable hostname must also encode cleanly without blocking on DNS
+        String offlineHostCode = RoomCodeHelper.encodeRoomCode("nonexistent.invalid.example", 25566);
+        RoomCodeHelper.ConnectionTarget offlineTarget = RoomCodeHelper.decodeRoomCode(offlineHostCode);
+        assertNotNull(offlineTarget);
+        assertEquals("nonexistent.invalid.example", offlineTarget.host());
+        assertEquals(25566, offlineTarget.port());
+        assertFalse(offlineTarget.isUdpHolePunch());
+    }
+
+    @Test
     void discordInviteExtractionAndDecode() {
         String ipv4Code = RoomCodeHelper.encodeRoomCode("85.102.50.21", 25565);
         String ipv4Invite = RoomCodeHelper.generateDiscordInvite(ipv4Code, "85.102.50.21", 25565, true, "survival");
