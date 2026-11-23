@@ -1,0 +1,45 @@
+name: Create GitHub Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Inject OAuth properties (if configured in Repo Secrets)
+        if: ${{ secrets.GOOGLE_CLIENT_ID != '' }}
+        run: |
+          cat <<EOF > local.properties
+          google.clientId=${{ secrets.GOOGLE_CLIENT_ID }}
+          google.clientSecret=${{ secrets.GOOGLE_CLIENT_SECRET }}
+          EOF
+
+      - name: Build Mod with Gradle
+        run: |
+          chmod +x gradlew
+          ./gradlew build
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            build/libs/fabric-p2p-world-*.jar \
+            --title "Fabric P2P World ${GITHUB_REF_NAME}" \
+            --notes-file CHANGELOG.md
