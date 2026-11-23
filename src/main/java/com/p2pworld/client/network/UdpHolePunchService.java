@@ -37,6 +37,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Pure-Java Essential-style UDP Hole Punching P2P engine with Reliable Ordered UDP (RUDP).
@@ -69,6 +70,8 @@ public class UdpHolePunchService {
     private static UdpHolePunchService instance;
 
     // Host state
+    private final Object hostLock = new Object();
+    private final AtomicLong hostGeneration = new AtomicLong(0);
     private volatile boolean hostActive = false;
     private volatile String hostRoomCode = null;
     private volatile String hostTopic = null;
@@ -81,6 +84,8 @@ public class UdpHolePunchService {
     private final Map<Integer, PeerSession> hostSessions = new ConcurrentHashMap<>();
 
     // Client join proxy state
+    private final Object clientLock = new Object();
+    private final AtomicLong clientGeneration = new AtomicLong(0);
     private volatile boolean clientActive = false;
     private volatile DatagramSocket clientUdpSocket = null;
     private volatile ServerSocket clientLocalServer = null;
@@ -117,6 +122,7 @@ public class UdpHolePunchService {
     public CompletableFuture<HostStartResult> startHostAsync(int localMcPort) {
         return CompletableFuture.supplyAsync(() -> {
             stopHost();
+            final long gen = hostGeneration.incrementAndGet();
             DatagramSocket udp = null;
             boolean handedOff = false;
             try {
@@ -134,62 +140,73 @@ public class UdpHolePunchService {
                 String rawId = randomCode(12);
                 String roomCode = "UDP-" + rawId.substring(0, 4) + "-" + rawId.substring(4, 8) + "-" + rawId.substring(8, 12);
                 String topic = "fp2p-" + rawId.toLowerCase();
+                String publicIp = mapped.getAddress().getHostAddress();
+                int publicPort = mapped.getPort();
 
-                this.hostUdpSocket = boundUdp;
-                this.hostPublicIp = mapped.getAddress().getHostAddress();
-                this.hostPublicPort = mapped.getPort();
-                this.hostRoomCode = roomCode;
-                this.hostTopic = topic;
-                this.hostActive = true;
-                handedOff = true;
-
-                this.punchExecutor = Executors.newFixedThreadPool(4, r -> {
-                    Thread t = new Thread(r, "FabricP2P-UDP-PunchOut");
-                    t.setDaemon(true);
-                    return t;
-                });
-
-                this.hostScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-                    Thread t = new Thread(r, "FabricP2P-UDP-Host-Timer");
-                    t.setDaemon(true);
-                    return t;
-                });
-
-                // Keep CGNAT UDP port mapping alive
-                this.hostScheduler.scheduleAtFixedRate(() -> {
-                    if (!hostActive) return;
-                    try {
-                        sendStunKeepalive(boundUdp, STUN_HOST, STUN_PORT);
-                    } catch (Exception ignored) {}
-                }, 12, 12, TimeUnit.SECONDS);
-
-                // Retransmit & idle session eviction loop
-                this.hostScheduler.scheduleAtFixedRate(() -> {
-                    if (!hostActive) return;
-                    for (PeerSession session : hostSessions.values()) {
-                        session.tickRetransmitAndTimeout();
+                synchronized (hostLock) {
+                    if (hostGeneration.get() != gen) {
+                        boundUdp.close();
+                        return new HostStartResult(false, null, null, -1, "Host startup cancelled");
                     }
-                }, 60, 60, TimeUnit.MILLISECONDS);
 
-                // UDP receive loop
-                Thread recvThread = new Thread(() -> runHostUdpLoop(boundUdp, localMcPort), "FabricP2P-UDP-Host-Recv");
-                recvThread.setDaemon(true);
-                recvThread.start();
+                    this.hostUdpSocket = boundUdp;
+                    this.hostPublicIp = publicIp;
+                    this.hostPublicPort = publicPort;
+                    this.hostRoomCode = roomCode;
+                    this.hostTopic = topic;
+                    this.hostActive = true;
+                    handedOff = true;
 
-                // Signaling listener loop (ntfy.sh streaming NDJSON)
-                Thread signalThread = new Thread(() -> runHostSignalLoop(topic, boundUdp), "FabricP2P-UDP-Host-Signal");
-                signalThread.setDaemon(true);
-                signalThread.start();
+                    this.punchExecutor = Executors.newFixedThreadPool(4, r -> {
+                        Thread t = new Thread(r, "FabricP2P-UDP-PunchOut");
+                        t.setDaemon(true);
+                        return t;
+                    });
+
+                    this.hostScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+                        Thread t = new Thread(r, "FabricP2P-UDP-Host-Timer");
+                        t.setDaemon(true);
+                        return t;
+                    });
+
+                    // Keep CGNAT UDP port mapping alive
+                    this.hostScheduler.scheduleAtFixedRate(() -> {
+                        if (!hostActive) return;
+                        try {
+                            sendStunKeepalive(boundUdp, STUN_HOST, STUN_PORT);
+                        } catch (Exception ignored) {}
+                    }, 12, 12, TimeUnit.SECONDS);
+
+                    // Retransmit & idle session eviction loop
+                    this.hostScheduler.scheduleAtFixedRate(() -> {
+                        if (!hostActive) return;
+                        for (PeerSession session : hostSessions.values()) {
+                            session.tickRetransmitAndTimeout();
+                        }
+                    }, 60, 60, TimeUnit.MILLISECONDS);
+
+                    // UDP receive loop
+                    Thread recvThread = new Thread(() -> runHostUdpLoop(boundUdp, localMcPort), "FabricP2P-UDP-Host-Recv");
+                    recvThread.setDaemon(true);
+                    recvThread.start();
+
+                    // Signaling listener loop (ntfy.sh streaming NDJSON)
+                    Thread signalThread = new Thread(() -> runHostSignalLoop(topic, boundUdp), "FabricP2P-UDP-Host-Signal");
+                    signalThread.setDaemon(true);
+                    signalThread.start();
+                }
 
                 FabricP2PMod.LOGGER.info("[P2P-UDP] Host ready! RoomCode={} | STUN={}:{} -> 127.0.0.1:{}",
-                        roomCode, hostPublicIp, hostPublicPort, localMcPort);
-                return new HostStartResult(true, roomCode, hostPublicIp, hostPublicPort, null);
+                        roomCode, publicIp, publicPort, localMcPort);
+                return new HostStartResult(true, roomCode, publicIp, publicPort, null);
             } catch (Exception e) {
                 FabricP2PMod.LOGGER.error("[P2P-UDP] Failed to start UDP host: {}", e.getMessage());
                 if (!handedOff && udp != null) {
                     try { udp.close(); } catch (Exception ignored) {}
                 }
-                stopHost();
+                if (hostGeneration.get() == gen) {
+                    stopHost();
+                }
                 return new HostStartResult(false, null, null, -1, e.getMessage());
             }
         });
@@ -332,32 +349,35 @@ public class UdpHolePunchService {
     }
 
     public void stopHost() {
-        this.hostActive = false;
-        this.hostRoomCode = null;
-        this.hostTopic = null;
-        this.hostPublicIp = null;
-        this.hostPublicPort = -1;
+        hostGeneration.incrementAndGet();
+        synchronized (hostLock) {
+            this.hostActive = false;
+            this.hostRoomCode = null;
+            this.hostTopic = null;
+            this.hostPublicIp = null;
+            this.hostPublicPort = -1;
 
-        if (hostScheduler != null) {
-            hostScheduler.shutdownNow();
-            hostScheduler = null;
-        }
-        if (punchExecutor != null) {
-            punchExecutor.shutdownNow();
-            punchExecutor = null;
-        }
-        if (hostSignalConn != null) {
-            try { hostSignalConn.disconnect(); } catch (Exception ignored) {}
-            hostSignalConn = null;
-        }
-        for (PeerSession s : hostSessions.values()) {
-            s.close();
-        }
-        hostSessions.clear();
+            if (hostScheduler != null) {
+                hostScheduler.shutdownNow();
+                hostScheduler = null;
+            }
+            if (punchExecutor != null) {
+                punchExecutor.shutdownNow();
+                punchExecutor = null;
+            }
+            if (hostSignalConn != null) {
+                try { hostSignalConn.disconnect(); } catch (Exception ignored) {}
+                hostSignalConn = null;
+            }
+            for (PeerSession s : hostSessions.values()) {
+                s.close();
+            }
+            hostSessions.clear();
 
-        if (hostUdpSocket != null) {
-            try { hostUdpSocket.close(); } catch (Exception ignored) {}
-            hostUdpSocket = null;
+            if (hostUdpSocket != null) {
+                try { hostUdpSocket.close(); } catch (Exception ignored) {}
+                hostUdpSocket = null;
+            }
         }
     }
 
@@ -370,6 +390,7 @@ public class UdpHolePunchService {
     public CompletableFuture<ClientProxyResult> startClientProxyAsync(String udpRoomCode) {
         return CompletableFuture.supplyAsync(() -> {
             stopClientProxy();
+            final long gen = clientGeneration.incrementAndGet();
             DatagramSocket udp = null;
             ServerSocket localServer = null;
             boolean handedOff = false;
@@ -391,6 +412,10 @@ public class UdpHolePunchService {
                 if (myMapped == null) {
                     boundUdp.close();
                     return new ClientProxyResult(false, -1, "STUN discovery failed on client");
+                }
+                if (clientGeneration.get() != gen) {
+                    boundUdp.close();
+                    return new ClientProxyResult(false, -1, "Client proxy startup cancelled");
                 }
 
                 // Subscribe to signaling BEFORE publishing join request, synchronizing on stream open
@@ -436,21 +461,26 @@ public class UdpHolePunchService {
                 sigReader.setDaemon(true);
                 sigReader.start();
 
-                // Wait for ntfy.sh open event (up to 2.5s) before publishing join request
-                subscribedLatch.await(2500, TimeUnit.MILLISECONDS);
-                JsonObject joinObj = new JsonObject();
-                joinObj.addProperty("role", "join");
-                joinObj.addProperty("id", peerId);
-                joinObj.addProperty("ip", myMapped.getAddress().getHostAddress());
-                joinObj.addProperty("port", myMapped.getPort());
-                joinObj.addProperty("sid", sessionId);
-                publishSignal(topic, joinObj.toString());
-
                 InetSocketAddress hostAddr;
                 try {
+                    // Wait for ntfy.sh open event (up to 2.5s) before publishing join request
+                    subscribedLatch.await(2500, TimeUnit.MILLISECONDS);
+                    JsonObject joinObj = new JsonObject();
+                    joinObj.addProperty("role", "join");
+                    joinObj.addProperty("id", peerId);
+                    joinObj.addProperty("ip", myMapped.getAddress().getHostAddress());
+                    joinObj.addProperty("port", myMapped.getPort());
+                    joinObj.addProperty("sid", sessionId);
+                    publishSignal(topic, joinObj.toString());
+
                     hostAddr = hostAddrFuture.get(7, TimeUnit.SECONDS);
                 } finally {
                     try { signalConn.disconnect(); } catch (Exception ignored) {}
+                }
+
+                if (clientGeneration.get() != gen) {
+                    boundUdp.close();
+                    return new ClientProxyResult(false, -1, "Client proxy startup cancelled");
                 }
 
                 // Perform UDP Hole Punching handshake with Host
@@ -458,7 +488,7 @@ public class UdpHolePunchService {
                 boolean punched = false;
                 byte[] rxBuf = new byte[2048];
                 long punchDeadline = System.currentTimeMillis() + 5000;
-                while (System.currentTimeMillis() < punchDeadline) {
+                while (System.currentTimeMillis() < punchDeadline && clientGeneration.get() == gen) {
                     sendPacket(boundUdp, hostAddr, TYPE_PUNCH, sessionId, 0, null, 0);
                     try {
                         DatagramPacket rx = new DatagramPacket(rxBuf, rxBuf.length);
@@ -480,6 +510,11 @@ public class UdpHolePunchService {
                     } catch (IOException ignored) {}
                 }
 
+                if (clientGeneration.get() != gen) {
+                    boundUdp.close();
+                    return new ClientProxyResult(false, -1, "Client proxy startup cancelled");
+                }
+
                 if (!punched) {
                     boundUdp.close();
                     return new ClientProxyResult(false, -1, "UDP hole punch timed out (Symmetric NAT?)");
@@ -491,80 +526,88 @@ public class UdpHolePunchService {
                 localServer = boundLocalServer;
                 int localProxyPort = boundLocalServer.getLocalPort();
 
-                this.clientUdpSocket = boundUdp;
-                this.clientLocalServer = boundLocalServer;
-                this.clientActive = true;
-                handedOff = true;
-
-                PeerSession session = new PeerSession(sessionId, boundUdp, punchedHostAddr, this::stopClientProxy);
-                this.clientSession = session;
-
-                this.clientScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-                    Thread t = new Thread(r, "FabricP2P-UDP-Client-Timer");
-                    t.setDaemon(true);
-                    return t;
-                });
-                this.clientScheduler.scheduleAtFixedRate(() -> {
-                    if (clientActive && clientSession != null) {
-                        clientSession.tickRetransmitAndTimeout();
+                synchronized (clientLock) {
+                    if (clientGeneration.get() != gen) {
+                        try { boundLocalServer.close(); } catch (Exception ignored) {}
+                        try { boundUdp.close(); } catch (Exception ignored) {}
+                        return new ClientProxyResult(false, -1, "Client proxy startup cancelled");
                     }
-                }, 60, 60, TimeUnit.MILLISECONDS);
-                this.clientScheduler.scheduleAtFixedRate(() -> {
-                    if (clientActive && !boundUdp.isClosed()) {
-                        try {
-                            sendPacket(boundUdp, session.remoteAddr, TYPE_KEEPALIVE, sessionId, 0, null, 0);
-                        } catch (Exception ignored) {}
-                    }
-                }, 6, 6, TimeUnit.SECONDS);
 
-                // Client UDP receive loop
-                Thread recvThread = new Thread(() -> {
-                    byte[] b = new byte[2048];
-                    while (clientActive && !boundUdp.isClosed()) {
+                    this.clientUdpSocket = boundUdp;
+                    this.clientLocalServer = boundLocalServer;
+                    this.clientActive = true;
+                    handedOff = true;
+
+                    PeerSession session = new PeerSession(sessionId, boundUdp, punchedHostAddr, this::stopClientProxy);
+                    this.clientSession = session;
+
+                    this.clientScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+                        Thread t = new Thread(r, "FabricP2P-UDP-Client-Timer");
+                        t.setDaemon(true);
+                        return t;
+                    });
+                    this.clientScheduler.scheduleAtFixedRate(() -> {
+                        if (clientActive && clientSession != null) {
+                            clientSession.tickRetransmitAndTimeout();
+                        }
+                    }, 60, 60, TimeUnit.MILLISECONDS);
+                    this.clientScheduler.scheduleAtFixedRate(() -> {
+                        if (clientActive && !boundUdp.isClosed()) {
+                            try {
+                                sendPacket(boundUdp, session.remoteAddr, TYPE_KEEPALIVE, sessionId, 0, null, 0);
+                            } catch (Exception ignored) {}
+                        }
+                    }, 6, 6, TimeUnit.SECONDS);
+
+                    // Client UDP receive loop
+                    Thread recvThread = new Thread(() -> {
+                        byte[] b = new byte[2048];
+                        while (clientActive && !boundUdp.isClosed()) {
+                            try {
+                                DatagramPacket p = new DatagramPacket(b, b.length);
+                                boundUdp.receive(p);
+                                int len = p.getLength();
+                                if (len < HEADER_SIZE || b[0] != MAGIC_0 || b[1] != MAGIC_1) continue;
+                                ByteBuffer bb = ByteBuffer.wrap(b, 0, len);
+                                bb.position(2);
+                                byte type = bb.get();
+                                bb.get();
+                                int sid = bb.getInt();
+                                int seq = bb.getInt();
+                                int pLen = bb.getShort() & 0xFFFF;
+                                if (sid == sessionId && session.acceptsRemoteAddress((InetSocketAddress) p.getSocketAddress())) {
+                                    handleSessionPacket(session, type, seq, b, HEADER_SIZE, Math.min(pLen, len - HEADER_SIZE));
+                                }
+                            } catch (IOException e) {
+                                break;
+                            }
+                        }
+                    }, "FabricP2P-UDP-Client-Recv");
+                    recvThread.setDaemon(true);
+                    recvThread.start();
+
+                    // Accept local Minecraft client connection
+                    Thread acceptThread = new Thread(() -> {
                         try {
-                            DatagramPacket p = new DatagramPacket(b, b.length);
-                            boundUdp.receive(p);
-                            int len = p.getLength();
-                            if (len < HEADER_SIZE || b[0] != MAGIC_0 || b[1] != MAGIC_1) continue;
-                            ByteBuffer bb = ByteBuffer.wrap(b, 0, len);
-                            bb.position(2);
-                            byte type = bb.get();
-                            bb.get();
-                            int sid = bb.getInt();
-                            int seq = bb.getInt();
-                            int pLen = bb.getShort() & 0xFFFF;
-                            if (sid == sessionId && session.acceptsRemoteAddress((InetSocketAddress) p.getSocketAddress())) {
-                                handleSessionPacket(session, type, seq, b, HEADER_SIZE, Math.min(pLen, len - HEADER_SIZE));
+                            boundLocalServer.setSoTimeout(15_000);
+                            Socket mcSock = boundLocalServer.accept();
+                            mcSock.setTcpNoDelay(true);
+                            session.attachTcpSocket(mcSock);
+                        } catch (SocketTimeoutException e) {
+                            if (clientActive && clientLocalServer == boundLocalServer) {
+                                FabricP2PMod.LOGGER.warn("[P2P-UDP] Local proxy accept timed out — cleaning up client proxy.");
+                                stopClientProxy();
                             }
                         } catch (IOException e) {
-                            break;
+                            if (clientActive && clientLocalServer == boundLocalServer) {
+                                FabricP2PMod.LOGGER.warn("[P2P-UDP] Local proxy accept error ({}) — cleaning up client proxy.", e.getMessage());
+                                stopClientProxy();
+                            }
                         }
-                    }
-                }, "FabricP2P-UDP-Client-Recv");
-                recvThread.setDaemon(true);
-                recvThread.start();
-
-                // Accept local Minecraft client connection
-                Thread acceptThread = new Thread(() -> {
-                    try {
-                        boundLocalServer.setSoTimeout(15_000);
-                        Socket mcSock = boundLocalServer.accept();
-                        mcSock.setTcpNoDelay(true);
-                        session.attachTcpSocket(mcSock);
-                    } catch (SocketTimeoutException e) {
-                        if (clientActive && clientLocalServer == boundLocalServer) {
-                            FabricP2PMod.LOGGER.warn("[P2P-UDP] Local proxy accept timed out — cleaning up client proxy.");
-                            stopClientProxy();
-                        }
-                    } catch (IOException e) {
-                        if (clientActive && clientLocalServer == boundLocalServer) {
-                            FabricP2PMod.LOGGER.warn("[P2P-UDP] Local proxy accept error ({}) — cleaning up client proxy.", e.getMessage());
-                            stopClientProxy();
-                        }
-                    }
-                }, "FabricP2P-UDP-Client-Accept");
-                acceptThread.setDaemon(true);
-                acceptThread.start();
+                    }, "FabricP2P-UDP-Client-Accept");
+                    acceptThread.setDaemon(true);
+                    acceptThread.start();
+                }
 
                 FabricP2PMod.LOGGER.info("[P2P-UDP] Direct UDP P2P punched to {}! Local MC proxy on 127.0.0.1:{}",
                         punchedHostAddr, localProxyPort);
@@ -579,29 +622,34 @@ public class UdpHolePunchService {
                         try { udp.close(); } catch (Exception ignored) {}
                     }
                 }
-                stopClientProxy();
+                if (clientGeneration.get() == gen) {
+                    stopClientProxy();
+                }
                 return new ClientProxyResult(false, -1, e.getMessage());
             }
         });
     }
 
     public void stopClientProxy() {
-        this.clientActive = false;
-        if (clientScheduler != null) {
-            clientScheduler.shutdownNow();
-            clientScheduler = null;
-        }
-        if (clientSession != null) {
-            clientSession.close();
-            clientSession = null;
-        }
-        if (clientLocalServer != null) {
-            try { clientLocalServer.close(); } catch (Exception ignored) {}
-            clientLocalServer = null;
-        }
-        if (clientUdpSocket != null) {
-            try { clientUdpSocket.close(); } catch (Exception ignored) {}
-            clientUdpSocket = null;
+        clientGeneration.incrementAndGet();
+        synchronized (clientLock) {
+            this.clientActive = false;
+            if (clientScheduler != null) {
+                clientScheduler.shutdownNow();
+                clientScheduler = null;
+            }
+            if (clientSession != null) {
+                clientSession.close();
+                clientSession = null;
+            }
+            if (clientLocalServer != null) {
+                try { clientLocalServer.close(); } catch (Exception ignored) {}
+                clientLocalServer = null;
+            }
+            if (clientUdpSocket != null) {
+                try { clientUdpSocket.close(); } catch (Exception ignored) {}
+                clientUdpSocket = null;
+            }
         }
     }
 

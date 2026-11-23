@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -28,6 +29,7 @@ public class TunnelRelayService {
 
     private static TunnelRelayService instance;
 
+    private final AtomicLong tunnelGeneration = new AtomicLong(0);
     private volatile boolean active = false;
     private volatile String remoteHost = RELAY_HOST;
     private volatile int remotePort = -1;
@@ -87,10 +89,12 @@ public class TunnelRelayService {
     public CompletableFuture<TunnelStartResult> startTunnelAsync(int localPort) {
         return CompletableFuture.supplyAsync(() -> {
             stopTunnel();
-            this.localTargetPort = localPort;
+            final long gen = tunnelGeneration.incrementAndGet();
+            Socket ctrl = null;
+            boolean handedOff = false;
 
             try {
-                Socket ctrl = new Socket();
+                ctrl = new Socket();
                 ctrl.connect(new InetSocketAddress(RELAY_HOST, RELAY_CONTROL_PORT), 5000);
                 ctrl.setSoTimeout(10000);
                 ctrl.setTcpNoDelay(true);
@@ -101,35 +105,49 @@ public class TunnelRelayService {
 
                 String response = readJsonFrame(ctrl.getInputStream());
                 if (response == null) {
-                    ctrl.close();
+                    closeQuietly(ctrl);
                     return new TunnelStartResult(false, null, -1, "Relay server closed connection");
                 }
 
                 JsonElement elem = JsonParser.parseString(response);
                 if (!elem.isJsonObject() || !elem.getAsJsonObject().has("Hello")) {
-                    ctrl.close();
+                    closeQuietly(ctrl);
                     return new TunnelStartResult(false, null, -1, "Unexpected relay response: " + response);
                 }
 
                 int assignedPort = elem.getAsJsonObject().get("Hello").getAsInt();
                 ctrl.setSoTimeout(60_000); // Detect silent Wi-Fi/NAT disconnects via missed relay heartbeats
 
-                this.controlSocket = ctrl;
-                this.remoteHost = RELAY_HOST;
-                this.remotePort = assignedPort;
-                this.active = true;
+                final Socket committedCtrl = ctrl;
+                synchronized (this) {
+                    if (tunnelGeneration.get() != gen) {
+                        closeQuietly(ctrl);
+                        return new TunnelStartResult(false, null, -1, "Tunnel startup cancelled");
+                    }
+                    this.localTargetPort = localPort;
+                    this.controlSocket = committedCtrl;
+                    this.remoteHost = RELAY_HOST;
+                    this.remotePort = assignedPort;
+                    this.active = true;
+                    handedOff = true;
+
+                    this.controlThread = new Thread(() -> runControlLoop(committedCtrl, localPort), "FabricP2P-Tunnel-Control");
+                    this.controlThread.setDaemon(true);
+                    this.controlThread.start();
+                }
 
                 FabricP2PMod.LOGGER.info("[P2P-Tunnel] Tunnel established! {}:{} -> 127.0.0.1:{}",
                         RELAY_HOST, assignedPort, localPort);
 
-                this.controlThread = new Thread(() -> runControlLoop(ctrl, localPort), "FabricP2P-Tunnel-Control");
-                this.controlThread.setDaemon(true);
-                this.controlThread.start();
-
                 return new TunnelStartResult(true, RELAY_HOST, assignedPort, null);
             } catch (Exception e) {
                 FabricP2PMod.LOGGER.error("[P2P-Tunnel] Failed to start tunnel: {}", e.getMessage());
-                stopTunnel();
+                if (!handedOff) {
+                    closeQuietly(ctrl);
+                }
+                if (tunnelGeneration.get() == gen) {
+                    stopTunnel();
+                }
                 return new TunnelStartResult(false, null, -1, e.getMessage());
             }
         });
@@ -265,18 +283,21 @@ public class TunnelRelayService {
     }
 
     public void stopTunnel() {
-        this.active = false;
-        this.remotePort = -1;
-        this.localTargetPort = -1;
+        tunnelGeneration.incrementAndGet();
+        synchronized (this) {
+            this.active = false;
+            this.remotePort = -1;
+            this.localTargetPort = -1;
 
-        Socket ctrl = this.controlSocket;
-        this.controlSocket = null;
-        closeQuietly(ctrl);
+            Socket ctrl = this.controlSocket;
+            this.controlSocket = null;
+            closeQuietly(ctrl);
 
-        for (Socket s : activeProxySockets) {
-            closeQuietly(s);
+            for (Socket s : activeProxySockets) {
+                closeQuietly(s);
+            }
+            activeProxySockets.clear();
         }
-        activeProxySockets.clear();
     }
 
     private static void sendJsonFrame(OutputStream out, String json) throws IOException {

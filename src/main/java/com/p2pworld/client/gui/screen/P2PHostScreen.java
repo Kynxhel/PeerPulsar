@@ -44,6 +44,10 @@ public class P2PHostScreen extends Screen {
     private long toastStartMs = 0;
     private static final long TOAST_DURATION_MS = 3400;
 
+    private boolean lastSyncedP2PActive;
+    private boolean lastSyncedStarting;
+    private boolean lastSyncedDiagTesting;
+
     // Layout metrics computed from screen size
     private int panelW;
     private int sideW;
@@ -463,6 +467,9 @@ public class P2PHostScreen extends Screen {
         boolean busy = networkManager.isStarting();
         NetworkDiagnosticsService diag = NetworkDiagnosticsService.getInstance();
         boolean testing = diag.isTesting();
+        this.lastSyncedP2PActive = active;
+        this.lastSyncedStarting = busy;
+        this.lastSyncedDiagTesting = testing;
         ConnectionMode selected = networkManager.getSelectedConnectionMode();
 
         if (startStopButton != null) {
@@ -757,6 +764,16 @@ public class P2PHostScreen extends Screen {
 
         NeonRenderUtils.drawToast(graphics, this.font, this.width, this.height,
                 toastMessage, toastAccent, toastStartMs, TOAST_DURATION_MS);
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        if (networkManager.isP2PActive() != lastSyncedP2PActive
+                || networkManager.isStarting() != lastSyncedStarting
+                || NetworkDiagnosticsService.getInstance().isTesting() != lastSyncedDiagTesting) {
+            updateWidgetStates();
+        }
     }
 
     @Override

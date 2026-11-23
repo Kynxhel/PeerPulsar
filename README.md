@@ -40,7 +40,7 @@ When you open the **Start P2P** screen, the mod automatically tests your network
 
 1. Install **Minecraft 26.3** with **Fabric Loader `>= 0.19.5`**.
 2. Download and install **Fabric API** for Minecraft `26.3`.
-3. Drop `fabric-p2p-world-26.3-2.1.3+26.3.jar` into your `.minecraft/mods/` folder.
+3. Drop `fabric-p2p-world-26.3-2.1.4+26.3.jar` into your `.minecraft/mods/` folder.
 4. Launch the game — open any world, press `Esc`, and click **`Start P2P`**!
 
 ---

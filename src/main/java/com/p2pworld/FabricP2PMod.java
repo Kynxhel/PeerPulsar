@@ -153,7 +153,7 @@ public class FabricP2PMod implements ModInitializer {
                                                         if (shared && server.isRunning()) {
                                                             server.execute(() -> {
                                                                 ServerPlayer target = server.getPlayerList().getPlayer(playerUuid);
-                                                                if (target != null) {
+                                                                if (target != null && target == joiningPlayer) {
                                                                     ServerPlayNetworking.send(target,
                                                                             new P2PIdentityPayloads.SharedWorldGrantS2CPayload(worldFolderId, worldName));
                                                                 }

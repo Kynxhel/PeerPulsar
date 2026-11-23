@@ -308,7 +308,7 @@ public class SharedWorldsScreen extends Screen {
         CompletableFuture.supplyAsync(manager::listSharedWorlds).whenComplete((result, err) -> {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
-                if (refreshGeneration.get() != gen) return;
+                if (!this.screenActive || refreshGeneration.get() != gen) return;
                 this.loadingWorlds = false;
                 if (err != null) {
                     updateWidgetStates();
@@ -388,6 +388,7 @@ public class SharedWorldsScreen extends Screen {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
                 this.busy = false;
+                if (!this.screenActive) return;
                 refreshWorldsListAsync(false);
                 updateWidgetStates();
                 if (err != null) {
@@ -435,6 +436,7 @@ public class SharedWorldsScreen extends Screen {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
                 this.busy = false;
+                if (!this.screenActive) return;
                 refreshWorldsListAsync(false);
                 updateWidgetStates();
                 if (err != null) {
@@ -458,6 +460,7 @@ public class SharedWorldsScreen extends Screen {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
                 this.busy = false;
+                if (!this.screenActive) return;
                 refreshWorldsListAsync(false);
                 updateWidgetStates();
                 if (err != null) {

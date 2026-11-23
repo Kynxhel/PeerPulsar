@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.1.4+26.3
+- **UDP Hole Punching & Tunnel Relay Lifecycle Hardening:** Added generation-based cancellation guards to `UdpHolePunchService` (`startHostAsync` / `startClientProxyAsync`) and `TunnelRelayService` (`startTunnelAsync`) to prevent zombie sockets/threads on concurrent stop, and guaranteed `signalConn.disconnect()` on signaling publish errors.
+- **Shared Cloud Worlds & Google Drive Reliability:** Prevented zombie session-lock heartbeats on rapid host start/stop, blocked manual uploads from overwriting a live hosted world (`session.lock.json` freshness check), skipped vanished transient files (`NoSuchFileException`) during live singleplayer uploads, deferred local save folder creation until pull validation succeeds, and ordered Drive file queries by `modifiedTime desc`.
+- **Google OAuth Hardening:** Prevented stray/mismatched `state` requests on the loopback `/callback` server from aborting an in-progress sign-in flow, added resilient unexpired `id_token` fallback on transient refresh errors, and added `GoogleAuthServiceTest` JUnit 5 tests.
+- **UI & Release Improvements:** Added `P2PHostScreen.tick()` state synchronization so unexpected tunnel drops immediately update buttons/cards, guarded closed `SharedWorldsScreen` callbacks against unnecessary Drive refreshes, tightened auto-share player identity checks, and extracted per-version release notes in `.github/workflows/release.yml`.
+
 ## v2.1.3+26.3
 - **Shared Worlds Sync Safety & Drive Fixes:** Committed updated `manifest.json` and `meta.json` before deleting obsolete remote/local files to prevent broken sync states on interrupted uploads, and scoped Google Drive root folder lookup to `'root' in parents`.
 - **IdentityGuard Hardening:** Added per-player OIDC verification deduplication (`tryBeginVerification`), atomic writes for `fabricp2p_identities.json`, and blocked item drops, inventory manipulation, chat, and commands while a bound player is pending verification (`ServerGamePacketListenerImplMixin`).

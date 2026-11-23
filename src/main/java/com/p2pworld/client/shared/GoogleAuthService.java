@@ -136,17 +136,24 @@ public class GoogleAuthService {
                         String state = params.get("state");
                         String err = params.get("error");
 
+                        int statusCode;
                         String html;
-                        if (code != null && !code.isBlank() && expectedState.equals(state)) {
+                        if (!expectedState.equals(state)) {
+                            statusCode = 400;
+                            String reason = "Invalid OAuth state parameter (CSRF check failed)";
+                            html = "<html><body style='background:#060913;color:#ef4444;font-family:sans-serif;text-align:center;padding-top:80px'>"
+                                    + "<h1>Sign-In Cancelled / Failed</h1><p>" + escapeHtml(reason) + "</p>"
+                                    + "</body></html>";
+                        } else if (code != null && !code.isBlank() && (err == null || err.isBlank())) {
+                            statusCode = 200;
                             html = "<html><body style='background:#060913;color:#f8fafc;font-family:sans-serif;text-align:center;padding-top:80px'>"
                                     + "<h1 style='color:#10b981'>&#10004; Google Sign-In Successful!</h1>"
                                     + "<p style='color:#94a3b8'>You can close this tab and return to Minecraft (Fabric P2P World).</p>"
                                     + "</body></html>";
                             codeFuture.complete(code);
                         } else {
-                            String reason = !expectedState.equals(state) && (err == null || err.isBlank())
-                                    ? "Invalid OAuth state parameter (CSRF check failed)"
-                                    : (err != null ? err : "Unknown error");
+                            statusCode = 200;
+                            String reason = (err != null && !err.isBlank()) ? err : "Unknown error";
                             html = "<html><body style='background:#060913;color:#ef4444;font-family:sans-serif;text-align:center;padding-top:80px'>"
                                     + "<h1>Sign-In Cancelled / Failed</h1><p>" + escapeHtml(reason) + "</p>"
                                     + "</body></html>";
@@ -155,7 +162,7 @@ public class GoogleAuthService {
 
                         byte[] body = html.getBytes(StandardCharsets.UTF_8);
                         exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
-                        exchange.sendResponseHeaders(200, body.length);
+                        exchange.sendResponseHeaders(statusCode, body.length);
                         try (OutputStream os = exchange.getResponseBody()) {
                             os.write(body);
                         }
@@ -327,6 +334,10 @@ public class GoogleAuthService {
                 FabricP2PMod.LOGGER.warn("[GoogleAuth] Token refresh did not return a fresh unexpired id_token; cleared stale id_token.");
                 return "";
             } catch (Exception e) {
+                if (isJwtUnexpired(cached, 5_000L)) {
+                    FabricP2PMod.LOGGER.warn("[GoogleAuth] Failed to refresh id_token ({}); using still-valid cached id_token.", e.getMessage());
+                    return cached;
+                }
                 if (!cached.isBlank() && !isJwtUnexpired(cached, 0L)) {
                     cfg.clearGoogleIdToken();
                 }

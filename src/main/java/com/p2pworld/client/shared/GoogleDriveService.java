@@ -511,7 +511,7 @@ public class GoogleDriveService {
         do {
             StringBuilder url = new StringBuilder(DRIVE_API)
                     .append("?q=").append(URLEncoder.encode(query, StandardCharsets.UTF_8))
-                    .append("&pageSize=1000&fields=nextPageToken,files(id,name)");
+                    .append("&orderBy=modifiedTime%20desc&pageSize=1000&fields=nextPageToken,files(id,name)");
             if (pageToken != null && !pageToken.isBlank()) {
                 url.append("&pageToken=").append(URLEncoder.encode(pageToken, StandardCharsets.UTF_8));
             }

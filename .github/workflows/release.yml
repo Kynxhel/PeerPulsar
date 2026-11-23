@@ -45,8 +45,17 @@ jobs:
             echo "Built mod JAR not found!" >&2
             exit 1
           fi
+          awk -v tag="${GITHUB_REF_NAME}" '
+            { sub(/\r$/, "") }
+            $0 == "## " tag { found=1; print; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            cp CHANGELOG.md release_notes.md
+          fi
           gh release delete "${GITHUB_REF_NAME}" --yes || true
           gh release create "${GITHUB_REF_NAME}" \
             "$MOD_JAR" \
             --title "Fabric P2P World ${GITHUB_REF_NAME}" \
-            --notes-file CHANGELOG.md
+            --notes-file release_notes.md
