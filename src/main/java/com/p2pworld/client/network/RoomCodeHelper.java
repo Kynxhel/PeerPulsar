@@ -213,12 +213,12 @@ public class RoomCodeHelper {
         String endpointLine = isUdp
                 ? "⚡ **Connection:** Direct UDP P2P (paste Room Code in 'Join P2P')\n"
                 : "🌐 **Direct Address:** `" + formatHostPort(hostIp, port) + "`\n";
-        return "🎮 **Join my Minecraft 26.3 P2P World!**\n" +
+        return "🎮 **Join my Minecraft 26.3 P2P World (Atarca)!**\n" +
                 "🔑 **Room Code:** `" + roomCode + "`\n" +
                 endpointLine +
                 "⚡ **Offline LAN Mode:** " + (offlineMode ? "Enabled" : "Disabled (Online Auth)") + "\n" +
                 "⚔️ **Game Mode:** " + safeMode + "\n" +
-                "👉 *Paste this invite into the 'Join P2P' screen in Fabric P2P World!*";
+                "👉 *Paste this invite into the 'Join P2P' screen in Atarca!*";
     }
 
     private static String bytesToHex(byte[] bytes) {

@@ -4,7 +4,6 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.p2pworld.FabricP2PMod;
-import com.p2pworld.client.shared.SharedWorldManager;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.server.IntegratedServer;
@@ -97,7 +96,7 @@ public class P2PNetworkManager {
                 stopP2PHost(client);
                 if (client.player != null) {
                     client.player.sendSystemMessage(Component.literal(
-                            "§c⚠ [FabricP2P] §fTunnel Relay connection dropped (" + reason + "). Start P2P again to reconnect."
+                            "§c⚠ [Atarca] §fTunnel Relay connection dropped (" + reason + "). Start P2P again to reconnect."
                     ));
                 }
             });
@@ -396,7 +395,7 @@ public class P2PNetworkManager {
                     if (!useTunnel) {
                         FabricP2PMod.LOGGER.info("[P2P-26.3] Attempting Direct P2P via UPnP IGD...");
                         didUpnp = true;
-                        boolean upnpOk = UPnPService.getInstance().openPort(port, "Minecraft P2P World (26.3)");
+                        boolean upnpOk = UPnPService.getInstance().openPort(port, "Atarca P2P World (26.3)");
                         if (isHostAttemptCancelled(gen, server)) {
                             rollbackHostAttempt(client, server, gen, didPublish, didUpnp, false, false, callback);
                             return;
@@ -466,9 +465,6 @@ public class P2PNetworkManager {
                     return;
                 }
 
-                // If Shared Cloud Worlds is enabled for this world, publish live lock & heartbeat
-                SharedWorldManager.getInstance().onP2PHostStarted(client, candidateRoomCode, candidateMode, gen);
-
                 FabricP2PMod.LOGGER.info("[P2P-26.3] World hosted via {}! Room Code: {} -> {}:{}",
                         candidateMode, candidateRoomCode, candidateHost, candidatePort);
 
@@ -485,7 +481,7 @@ public class P2PNetworkManager {
                     }
                     if (client.player != null) {
                         client.player.sendSystemMessage(Component.literal(
-                                "§b✦ [FabricP2P] " + modeTag + " §fWorld is live! Room Code: §b§l" + finalRoomCode));
+                                "§b✦ [Atarca] " + modeTag + " §fWorld is live! Room Code: §b§l" + finalRoomCode));
                     }
                     callback.accept(true);
                 });
@@ -588,7 +584,6 @@ public class P2PNetworkManager {
         UPnPService.getInstance().closePortAsync();
         TunnelRelayService.getInstance().stopTunnel();
         UdpHolePunchService.getInstance().stopHost();
-        SharedWorldManager.getInstance().onP2PHostStopped(client, false);
 
         if (client != null) {
             IntegratedServer server = client.getSingleplayerServer();
@@ -607,7 +602,7 @@ public class P2PNetworkManager {
                 }
             }
             if (client.player != null) {
-                client.player.sendSystemMessage(Component.literal("§c■ [FabricP2P] §fP2P hosting stopped and network resources cleared."));
+                client.player.sendSystemMessage(Component.literal("§c■ [Atarca] §fP2P hosting stopped and network resources cleared."));
             }
         }
     }
@@ -632,7 +627,6 @@ public class P2PNetworkManager {
                 this.hostedRoomCode = null;
             }
         }
-        SharedWorldManager.getInstance().onP2PHostStopped(Minecraft.getInstance(), true);
         if (wasActiveOrStarting) {
             FabricP2PMod.LOGGER.info("[P2P-26.3] World disconnected — auto-cleaning UPnP, UDP & Tunnel.");
             UPnPService.getInstance().closePortAsync();

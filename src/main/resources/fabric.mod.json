@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "fabricp2p",
+  "id": "atarca",
   "version": "${version}",
-  "name": "Fabric P2P World",
-  "description": "Open-source peer-to-peer world hosting for Minecraft 26.3 with automatic NAT/CGNAT diagnostics, UPnP port forwarding, UDP Hole Punching, Tunnel Relay, smart room codes, optional Shared Cloud Worlds, and an animated neon glass UI.",
+  "name": "Atarca",
+  "description": "Open-source peer-to-peer world hosting for Minecraft 26.3 with automatic NAT/CGNAT diagnostics, UPnP port forwarding, UDP Hole Punching, Tunnel Relay, smart room codes, and an animated neon glass UI.",
   "authors": [
     "Kynxhel"
   ],
@@ -13,7 +13,7 @@
     "issues": "https://github.com/Kynxhel/fabric-p2p-world/issues"
   },
   "license": "MIT",
-  "icon": "assets/fabricp2p/icon.png",
+  "icon": "assets/atarca/icon.png",
   "environment": "client",
   "entrypoints": {
     "main": [
@@ -24,7 +24,7 @@
     ]
   },
   "mixins": [
-    "fabricp2p.mixins.json"
+    "atarca.mixins.json"
   ],
   "depends": {
     "fabricloader": ">=0.19.5",

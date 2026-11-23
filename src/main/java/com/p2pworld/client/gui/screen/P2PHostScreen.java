@@ -329,9 +329,9 @@ public class P2PHostScreen extends Screen {
         this.addRenderableWidget(copyDiscordButton);
 
         int footerY = Math.min(this.height - 22, actionY + actionH + (compact ? 4 : 6));
-        int footerBtnW = Math.min(138, Math.max(70, (this.width - 20) / 2));
+        int footerBtnW = Math.min(160, Math.max(90, this.width - 24));
         this.backButton = new NeonButton(
-                this.width / 2 - footerBtnW - 6, footerY, footerBtnW, 20,
+                this.width / 2 - footerBtnW / 2, footerY, footerBtnW, 20,
                 Component.literal("← ").append(Component.translatable("gui.back")),
                 NeonTheme.SLATE,
                 () -> {
@@ -341,18 +341,6 @@ public class P2PHostScreen extends Screen {
                 }
         );
         this.addRenderableWidget(backButton);
-
-        NeonButton sharedWorldsBtn = new NeonButton(
-                this.width / 2 + 6, footerY, footerBtnW, 20,
-                Component.literal("☁ ").append(Component.translatable("menu.fabricp2p.shared_worlds")),
-                NeonTheme.VIOLET,
-                () -> {
-                    if (this.minecraft != null) {
-                        this.minecraft.setScreenAndShow(new SharedWorldsScreen(this));
-                    }
-                }
-        );
-        this.addRenderableWidget(sharedWorldsBtn);
 
         updateWidgetStates();
 
@@ -568,7 +556,7 @@ public class P2PHostScreen extends Screen {
         int logoSize = compact ? 24 : 28;
         NeonRenderUtils.drawModLogo(graphics, panelLeft + 2, headerY, logoSize, primaryAccent, timeSec);
 
-        graphics.text(this.font, Component.literal("FABRIC P2P WORLD").withStyle(ChatFormatting.BOLD),
+        graphics.text(this.font, Component.literal("ATARCA").withStyle(ChatFormatting.BOLD),
                 panelLeft + logoSize + 10, headerY + 2, NeonTheme.TEXT_PRIMARY, true);
         if (!compact) {
             graphics.text(this.font, tr("screen.fabricp2p.host.subtitle"),

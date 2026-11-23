@@ -2,7 +2,6 @@ package com.p2pworld.mixin;
 
 import com.p2pworld.client.gui.fx.NeonTheme;
 import com.p2pworld.client.gui.screen.P2PJoinScreen;
-import com.p2pworld.client.gui.screen.SharedWorldsScreen;
 import com.p2pworld.client.gui.widget.NeonButton;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.screens.Screen;
@@ -47,13 +46,5 @@ public abstract class TitleScreenMixin extends Screen {
         );
 
         this.addRenderableWidget(joinP2PBtn);
-
-        NeonButton sharedWorldsBtn = new NeonButton(
-                x, y + 24, btnWidth, btnHeight,
-                Component.literal("☁ ").append(Component.translatable("menu.fabricp2p.shared_worlds")).withStyle(ChatFormatting.BOLD),
-                NeonTheme.VIOLET,
-                () -> this.minecraft.setScreenAndShow(new SharedWorldsScreen(this))
-        );
-        this.addRenderableWidget(sharedWorldsBtn);
     }
 }

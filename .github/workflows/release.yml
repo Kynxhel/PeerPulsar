@@ -22,15 +22,6 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
-      - name: Inject OAuth properties (if configured in Repo Secrets)
-        env:
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-        run: |
-          if [ -n "$GOOGLE_CLIENT_ID" ]; then
-            printf "google.clientId=%s\ngoogle.clientSecret=%s\n" "$GOOGLE_CLIENT_ID" "$GOOGLE_CLIENT_SECRET" > local.properties
-          fi
-
       - name: Build Mod with Gradle
         run: |
           chmod +x gradlew
@@ -40,7 +31,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          MOD_JAR=$(find build/libs -maxdepth 1 -name 'fabric-p2p-world-*.jar' ! -name '*-sources.jar' | head -n 1)
+          MOD_JAR=$(find build/libs -maxdepth 1 -name 'atarca-*.jar' ! -name '*-sources.jar' | head -n 1)
           if [ -z "$MOD_JAR" ]; then
             echo "Built mod JAR not found!" >&2
             exit 1
@@ -56,12 +47,12 @@ jobs:
           fi
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release edit "${GITHUB_REF_NAME}" \
-              --title "Fabric P2P World ${GITHUB_REF_NAME}" \
+              --title "Atarca ${GITHUB_REF_NAME}" \
               --notes-file release_notes.md
             gh release upload "${GITHUB_REF_NAME}" "$MOD_JAR" --clobber
           else
             gh release create "${GITHUB_REF_NAME}" \
               "$MOD_JAR" \
-              --title "Fabric P2P World ${GITHUB_REF_NAME}" \
+              --title "Atarca ${GITHUB_REF_NAME}" \
               --notes-file release_notes.md
           fi

@@ -28,44 +28,13 @@ dependencies {
 
 def resolvedModVersion = project.version.toString()
 def resolvedArchivesName = project.base.archivesName.get()
-def localPropsSource = layout.projectDirectory.file("local.properties").asFile
 
 processResources {
     inputs.property "version", resolvedModVersion
-    inputs.property "hasLocalProps", localPropsSource.exists()
-    inputs.files(localPropsSource)
     filteringCharset = "UTF-8"
 
     filesMatching("fabric.mod.json") {
         expand "version": resolvedModVersion
-    }
-
-    doLast {
-        def outFile = new File(destinationDir, "assets/fabricp2p/oauth.properties")
-        def extracted = new java.util.Properties()
-        if (localPropsSource.exists()) {
-            def raw = new java.util.Properties()
-            localPropsSource.withInputStream { is ->
-                raw.load(new java.io.InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8))
-            }
-            def clientId = raw.getProperty("google.clientId", "").trim()
-            def clientSecret = raw.getProperty("google.clientSecret", "").trim()
-            if (!clientId.isEmpty()) {
-                extracted.setProperty("google.clientId", clientId)
-                if (!clientSecret.isEmpty()) {
-                    extracted.setProperty("google.clientSecret", clientSecret)
-                }
-            }
-        }
-
-        if (extracted.containsKey("google.clientId")) {
-            outFile.parentFile.mkdirs()
-            outFile.withOutputStream { os ->
-                extracted.store(os, "FabricP2P Google OAuth Credentials")
-            }
-        } else if (outFile.exists()) {
-            outFile.delete()
-        }
     }
 }
 

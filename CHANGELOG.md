@@ -1,5 +1,9 @@
 # Changelog
 
+## v3.0.0+26.3
+- **Rebranded to Atarca:** Renamed the mod, ID (`atarca`), assets, UI titles, chat notifications, and release artifacts (`atarca-26.3-*.jar`) to **Atarca**.
+- **Removed Cloud World Sync & Google OAuth:** Completely removed Shared Cloud Worlds, Google Sign-In, Google Drive sync, and OIDC identity locking. Google Drive's `drive.file` scope does not permit invited players to read files created by another user inside shared folders, while the full `drive` scope enforces a 100-user cap on unverified apps and requires a paid annual CASA audit. Atarca now focuses 100% on fast, unlimited, zero-account P2P world hosting (Direct UPnP, UDP Hole Punching, Tunnel Relay, and Local LAN).
+
 ## v2.1.14+26.3
 - **Hotfix MC 26.3 `MinecraftMixin` Crash:** Replaced the removed `Minecraft.screen` `@Shadow` field with `Minecraft.gui.screen()` for Minecraft 26.3 compatibility.
 

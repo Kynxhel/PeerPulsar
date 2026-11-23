@@ -6,9 +6,7 @@
   "mixins": [],
   "client": [
     "ServerLoginPacketListenerImplMixin",
-    "ServerGamePacketListenerImplMixin",
     "IntegratedServerMixin",
-    "MinecraftMixin",
     "PauseScreenMixin",
     "TitleScreenMixin",
     "JoinMultiplayerScreenMixin"

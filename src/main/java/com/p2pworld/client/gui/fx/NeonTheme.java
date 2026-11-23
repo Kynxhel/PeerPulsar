@@ -8,7 +8,7 @@ import net.minecraft.resources.Identifier;
 public final class NeonTheme {
     private NeonTheme() {}
 
-    public static final Identifier MOD_ICON = Identifier.fromNamespaceAndPath("fabricp2p", "icon.png");
+    public static final Identifier MOD_ICON = Identifier.fromNamespaceAndPath("atarca", "icon.png");
 
     // Deep obsidian glass surfaces
     public static final int BG_TOP        = 0xCC060913;
