@@ -54,8 +54,8 @@ Rather than shipping a capped or intrusive cloud integration, **Atarca** focuses
 ## 🛠️ Building from Source
 
 ```bash
-git clone https://github.com/Kynxhel/fabric-p2p-world.git
-cd fabric-p2p-world
+git clone https://github.com/Kynxhel/Atarca.git
+cd Atarca
 ./gradlew build
 ```
 
@@ -68,4 +68,4 @@ The compiled mod JAR will be located in `build/libs/`.
 - **Open Source:** 100% auditable Java source code under the [MIT License](LICENSE).
 - **Zero Accounts / Zero Telemetry:** No login, no Google OAuth, and no central data-collection servers.
 - **Privacy Policy:** Read [PRIVACY.md](PRIVACY.md) for full details on P2P networking.
-- **Bug Reports & Suggestions:** Open an issue on [GitHub Issues](https://github.com/Kynxhel/fabric-p2p-world/issues).
+- **Bug Reports & Suggestions:** Open an issue on [GitHub Issues](https://github.com/Kynxhel/Atarca/issues).
