@@ -29,7 +29,8 @@ def localPropsSource = layout.projectDirectory.file("local.properties").asFile
 
 processResources {
     inputs.property "version", resolvedModVersion
-    inputs.file(localPropsSource).optional()
+    inputs.property "hasLocalProps", localPropsSource.exists()
+    inputs.files(localPropsSource)
     filteringCharset = "UTF-8"
 
     filesMatching("fabric.mod.json") {
