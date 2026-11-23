@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.1.2+26.3
+- **UDP Hole Punching & RUDP Reliability:** Fixed `DatagramSocket` / `ServerSocket` leaks on signaling or startup errors in `UdpHolePunchService`, and added redundant `TYPE_FIN` transmission on disconnect so peers detect stream closure without waiting for idle timeout.
+- **OIDC Verification & Sync Concurrency:** Increased `PlayerIdentityGuard` OIDC verification timeout from 6s to 15s to prevent false kicks during token refresh, and replaced `syncInProgress` with an atomic active-operation counter in `SharedWorldManager` so exit-sync never clears an in-flight manual sync lock.
+- **UI Polish & Screen Lifecycle Safety:** Guarded async UDP join callbacks in `P2PJoinScreen` and `SharedWorldsScreen` via `Screen.removed()` so leaving the screen cancels stale auto-connects and cleans up the client proxy, and clamped long toast messages in `NeonRenderUtils` to screen width.
+
 ## v2.1.1+26.3
 - **IdentityGuard & OIDC Security Hardening:** Fixed MC 26.3 local singleplayer host detection (`isLocalHostPlayer`), blocked world interactions and anchored position during the verification window, added OIDC `aud`/`azp` validation, real JWT `exp` expiry checking on token refresh, and stopped broadcasting Google `id_token` when Shared Worlds is disabled.
 - **Networking, RUDP & UPnP Reliability:** Fixed RUDP `TYPE_FIN` drain so server disconnect/kick messages are no longer lost, added client-side UDP IP/session validation and STUN Transaction ID checks, made Local LAN start instantaneously offline without waiting for internet diagnostics, fixed Vanilla LAN auth restoration after stopping Offline P2P, fixed UPnP gateway cache & namespaced XML IP parsing, and fixed `TunnelRelayService` stream tracking and silent-drop detection.

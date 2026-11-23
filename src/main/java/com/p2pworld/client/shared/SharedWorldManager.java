@@ -33,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -58,13 +59,12 @@ public class SharedWorldManager {
 
     private final Object syncLock = new Object();
     private final Object heartbeatLock = new Object();
-    private final AtomicBoolean syncInProgress = new AtomicBoolean(false);
+    private final AtomicInteger activeSyncOps = new AtomicInteger(0);
 
     private volatile String activeHostedWorldName = null;
     private volatile Path activeHostedLocalDir = null;
     private volatile String activeRoomCode = null;
     private volatile String activeModeName = null;
-    private volatile boolean syncing = false;
     private volatile ScheduledExecutorService heartbeatExec = null;
     private final Set<String> knownDriveWorldNames = ConcurrentHashMap.newKeySet();
 
@@ -83,7 +83,7 @@ public class SharedWorldManager {
     }
 
     public boolean isSyncing() {
-        return syncInProgress.get();
+        return activeSyncOps.get() > 0;
     }
 
     public String getActiveHostedWorldName() {
@@ -274,10 +274,15 @@ public class SharedWorldManager {
                 ? mc.getUser().getName()
                 : "Host";
 
-        if (!syncInProgress.compareAndSet(false, true)) {
+        if (!activeSyncOps.compareAndSet(0, 1)) {
             return CompletableFuture.completedFuture(new SyncOpResult(false, "Another sync operation is already in progress."));
         }
-        this.syncing = true;
+        final AtomicBoolean released = new AtomicBoolean(false);
+        final Runnable releaseSync = () -> {
+            if (released.compareAndSet(false, true)) {
+                activeSyncOps.decrementAndGet();
+            }
+        };
 
         CompletableFuture<Void> saveFuture = new CompletableFuture<>();
         try {
@@ -294,35 +299,27 @@ public class SharedWorldManager {
                 }
             });
         } catch (Throwable t) {
-            syncInProgress.set(false);
-            this.syncing = false;
+            releaseSync.run();
             return CompletableFuture.completedFuture(new SyncOpResult(false, "Save failed before sync: " + errorMessage(t)));
         }
 
         return saveFuture.orTimeout(15, TimeUnit.SECONDS).handleAsync((v, saveErr) -> {
             synchronized (syncLock) {
                 if (saveErr != null) {
-                    syncInProgress.set(false);
-                    this.syncing = false;
+                    releaseSync.run();
                     return new SyncOpResult(false, "Save failed before sync: " + errorMessage(saveErr));
                 }
-                syncInProgress.set(true);
-                this.syncing = true;
                 try {
                     if (useDrive) {
                         return uploadIncrementalToGoogleDrive(worldDir, worldName, hostName);
                     }
                     return uploadIncrementalToLocalFolder(worldDir, worldName, hostName, true);
                 } finally {
-                    syncInProgress.set(false);
-                    this.syncing = false;
+                    releaseSync.run();
                 }
             }
         }).exceptionally(err -> {
-            synchronized (syncLock) {
-                syncInProgress.set(false);
-                this.syncing = false;
-            }
+            releaseSync.run();
             return new SyncOpResult(false, "Save failed before sync: " + errorMessage(err));
         });
     }
@@ -360,15 +357,18 @@ public class SharedWorldManager {
             }
         }
 
-        if (!syncInProgress.compareAndSet(false, true)) {
+        if (!activeSyncOps.compareAndSet(0, 1)) {
             return CompletableFuture.completedFuture(new SyncOpResult(false, "Another sync operation is already in progress."));
         }
-        this.syncing = true;
+        final AtomicBoolean released = new AtomicBoolean(false);
+        final Runnable releaseSync = () -> {
+            if (released.compareAndSet(false, true)) {
+                activeSyncOps.decrementAndGet();
+            }
+        };
 
         return CompletableFuture.supplyAsync(() -> {
             synchronized (syncLock) {
-                syncInProgress.set(true);
-                this.syncing = true;
                 try {
                     Files.createDirectories(targetWorldDir);
 
@@ -381,15 +381,11 @@ public class SharedWorldManager {
                     FabricP2PMod.LOGGER.error("[SharedWorlds] Incremental pull failed for '{}': {}", safeName, e.getMessage());
                     return new SyncOpResult(false, "Pull failed: " + e.getMessage());
                 } finally {
-                    syncInProgress.set(false);
-                    this.syncing = false;
+                    releaseSync.run();
                 }
             }
         }).exceptionally(err -> {
-            synchronized (syncLock) {
-                syncInProgress.set(false);
-                this.syncing = false;
-            }
+            releaseSync.run();
             return new SyncOpResult(false, "Pull failed: " + errorMessage(err));
         });
     }
@@ -827,8 +823,7 @@ public class SharedWorldManager {
 
                 if (cfg.isAutoSyncOnExit() && worldDir != null && Files.exists(worldDir)) {
                     synchronized (syncLock) {
-                        syncInProgress.set(true);
-                        this.syncing = true;
+                        activeSyncOps.incrementAndGet();
                         try {
                             if (useDrive) {
                                 uploadIncrementalToGoogleDrive(worldDir, worldName, hostName);
@@ -836,8 +831,7 @@ public class SharedWorldManager {
                                 uploadIncrementalToLocalFolder(worldDir, worldName, hostName, false);
                             }
                         } finally {
-                            syncInProgress.set(false);
-                            this.syncing = false;
+                            activeSyncOps.decrementAndGet();
                         }
                     }
                 }

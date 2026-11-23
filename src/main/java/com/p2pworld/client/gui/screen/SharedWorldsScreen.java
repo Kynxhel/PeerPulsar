@@ -57,6 +57,7 @@ public class SharedWorldsScreen extends Screen {
     private int selectedWorldIndex = 0;
     private boolean busy = false;
     private boolean loadingWorlds = false;
+    private boolean screenActive = true;
 
     private String toastMessage = null;
     private int toastAccent = NeonTheme.CYAN;
@@ -95,6 +96,7 @@ public class SharedWorldsScreen extends Screen {
 
     @Override
     protected void init() {
+        this.screenActive = true;
         computeLayout();
 
         // Row 1: Master Feature Toggle + Auto-Sync on Exit Toggle
@@ -351,6 +353,12 @@ public class SharedWorldsScreen extends Screen {
                     if (this.minecraft == null) return;
                     this.minecraft.execute(() -> {
                         this.busy = false;
+                        if (!this.screenActive) {
+                            if (err == null && res != null && res.success()) {
+                                UdpHolePunchService.getInstance().stopClientProxy();
+                            }
+                            return;
+                        }
                         updateWidgetStates();
                         if (err != null) {
                             showToast(tr("screen.fabricp2p.shared.toast_udp_fail", extractErrorMessage(err)), NeonTheme.CRIMSON);
@@ -619,6 +627,12 @@ public class SharedWorldsScreen extends Screen {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
         NeonRenderUtils.drawToast(graphics, this.font, this.width, this.height,
                 toastMessage, toastAccent, toastStartMs, 3600);
+    }
+
+    @Override
+    public void removed() {
+        this.screenActive = false;
+        super.removed();
     }
 
     @Override

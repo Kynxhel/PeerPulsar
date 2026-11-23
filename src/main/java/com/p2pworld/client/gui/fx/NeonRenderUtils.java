@@ -193,8 +193,18 @@ public final class NeonRenderUtils {
                 : 1.0f;
         float visibility = Math.min(inT, outT);
 
-        int textW = font.width(message);
-        int boxW = textW + 26;
+        int maxBoxW = Math.max(60, screenWidth - 16);
+        int maxTextW = Math.max(20, maxBoxW - 26);
+        String drawnMessage = message;
+        if (font.width(drawnMessage) > maxTextW) {
+            int ellW = font.width("...");
+            drawnMessage = maxTextW > ellW
+                    ? font.plainSubstrByWidth(drawnMessage, maxTextW - ellW) + "..."
+                    : font.plainSubstrByWidth(drawnMessage, maxTextW);
+        }
+
+        int textW = font.width(drawnMessage);
+        int boxW = Math.min(maxBoxW, textW + 26);
         int boxH = 22;
         int x = (screenWidth - boxW) / 2;
         int targetY = screenHeight - 36;
@@ -217,7 +227,7 @@ public final class NeonRenderUtils {
         graphics.fill(x + 2, y + boxH - 2, x + 2 + progW, y + boxH - 1, NeonTheme.withAlpha(accentRgb, Math.round(210 * visibility)));
 
         // Message
-        graphics.text(font, Component.literal(message), x + 12, y + 7,
+        graphics.text(font, Component.literal(drawnMessage), x + 12, y + 7,
                 NeonTheme.withAlpha(NeonTheme.TEXT_PRIMARY, Math.round(255 * visibility)), true);
     }
 }

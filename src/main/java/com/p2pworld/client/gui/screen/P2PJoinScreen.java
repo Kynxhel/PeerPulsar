@@ -35,6 +35,7 @@ public class P2PJoinScreen extends Screen {
     private P2PNetworkManager.PingResult lastPingResult = null;
     private boolean isTesting = false;
     private boolean isPunching = false;
+    private boolean screenActive = true;
 
     private String toastMessage = null;
     private int toastAccent = NeonTheme.CYAN;
@@ -55,6 +56,7 @@ public class P2PJoinScreen extends Screen {
 
     @Override
     protected void init() {
+        this.screenActive = true;
         int cx = this.width / 2;
         int panelW = Math.min(328, this.width - 20);
         int panelLeft = cx - panelW / 2;
@@ -210,6 +212,12 @@ public class P2PJoinScreen extends Screen {
                 if (this.minecraft == null) return;
                 this.minecraft.execute(() -> {
                     this.isPunching = false;
+                    if (!this.screenActive) {
+                        if (err == null && res != null && res.success()) {
+                            UdpHolePunchService.getInstance().stopClientProxy();
+                        }
+                        return;
+                    }
                     if (err != null || res == null) {
                         syncButtonStates();
                         showToast(tr("screen.fabricp2p.join.toast_punch_fail", extractErrorMessage(err)), NeonTheme.CRIMSON);
@@ -371,6 +379,12 @@ public class P2PJoinScreen extends Screen {
 
         NeonRenderUtils.drawToast(graphics, this.font, this.width, this.height,
                 toastMessage, toastAccent, toastStartMs, 3200);
+    }
+
+    @Override
+    public void removed() {
+        this.screenActive = false;
+        super.removed();
     }
 
     @Override

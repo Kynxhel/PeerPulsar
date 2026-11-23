@@ -40,7 +40,7 @@ public final class PlayerIdentityGuard {
     private static final Type MAP_TYPE = new TypeToken<Map<String, String>>() {}.getType();
     private static final String IDENTITY_FILE = "fabricp2p_identities.json";
     private static final String HASH_PREFIX = "sha256:";
-    private static final long VERIFICATION_TIMEOUT_SECONDS = 6L;
+    private static final long VERIFICATION_TIMEOUT_SECONDS = 15L;
     private static final double ANCHOR_DRIFT_LIMIT_SQR = 0.5 * 0.5;
 
     private record PendingAnchor(
@@ -132,7 +132,7 @@ public final class PlayerIdentityGuard {
     /**
      * Called when a player joins the server. If their username is already bound to a Google account,
      * they are held in a restricted pending-verification state and must present a valid Google-signed
-     * id_token matching that account within 6 seconds or be disconnected.
+     * id_token matching that account within 15 seconds or be disconnected.
      */
     public static void onPlayerJoin(ServerPlayer player, MinecraftServer server) {
         if (server == null || player == null) return;
@@ -166,7 +166,7 @@ public final class PlayerIdentityGuard {
                 player.getXRot()
         ));
 
-        // Wait up to 6 seconds for client to refresh/send & server to verify Google OIDC id_token
+        // Wait up to 15 seconds for client to refresh/send & server to verify Google OIDC id_token
         CompletableFuture.delayedExecutor(VERIFICATION_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() -> {
             if (!server.isRunning()) return;
             server.execute(() -> {
