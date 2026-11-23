@@ -79,8 +79,17 @@ public class GoogleAuthService {
     }
 
     private String resolveClientSecret() {
-        String custom = SharedWorldConfig.getInstance().getGoogleClientSecret();
-        return !custom.isBlank() ? custom : DEFAULT_CLIENT_SECRET;
+        SharedWorldConfig cfg = SharedWorldConfig.getInstance();
+        return resolveClientSecret(cfg.getGoogleClientId(), cfg.getGoogleClientSecret(), DEFAULT_CLIENT_SECRET);
+    }
+
+    static String resolveClientSecret(String customClientId, String customClientSecret, String defaultClientSecret) {
+        String cid = customClientId != null ? customClientId.trim() : "";
+        String csec = customClientSecret != null ? customClientSecret.trim() : "";
+        if (!cid.isBlank()) {
+            return csec;
+        }
+        return !csec.isBlank() ? csec : (defaultClientSecret != null ? defaultClientSecret : "");
     }
 
     private GoogleAuthService() {}

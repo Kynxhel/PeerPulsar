@@ -508,6 +508,7 @@ public class SharedWorldsScreen extends Screen {
         this.lastSyncedSignedIn = signedIn;
         boolean working = busy || bgWorking;
 
+        if (enableFeatureCard != null) enableFeatureCard.active = !working;
         if (autoSyncExitCard != null) autoSyncExitCard.active = enabled && !working;
         if (googleSignInButton != null) {
             googleSignInButton.active = enabled && !working;

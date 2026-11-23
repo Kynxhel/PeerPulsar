@@ -102,4 +102,12 @@ class GoogleAuthServiceTest {
                 "Mismatched non-empty azp must be rejected");
         assertFalse(GoogleAuthService.isValidAudience(cid, "", cid));
     }
+
+    @Test
+    void customClientIdDoesNotInheritBundledDefaultSecret() {
+        assertEquals("", GoogleAuthService.resolveClientSecret("custom-client-id", "", "bundled-secret"),
+                "Custom public/PKCE OAuth Client ID must not fall back to the bundled default secret");
+        assertEquals("custom-secret", GoogleAuthService.resolveClientSecret("custom-client-id", "custom-secret", "bundled-secret"));
+        assertEquals("bundled-secret", GoogleAuthService.resolveClientSecret("", "", "bundled-secret"));
+    }
 }

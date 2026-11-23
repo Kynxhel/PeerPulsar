@@ -20,6 +20,16 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
+      - name: Inject OAuth properties (if configured in Repo Secrets)
+        if: github.event_name == 'push'
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          if [ -n "$GOOGLE_CLIENT_ID" ]; then
+            printf "google.clientId=%s\ngoogle.clientSecret=%s\n" "$GOOGLE_CLIENT_ID" "$GOOGLE_CLIENT_SECRET" > local.properties
+          fi
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 

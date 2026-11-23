@@ -64,7 +64,7 @@ public class SharedWorldManager {
     private final Object syncLock = new Object();
     private final Object heartbeatLock = new Object();
     private final AtomicInteger activeSyncOps = new AtomicInteger(0);
-    private final AtomicLong heartbeatSessionSeq = new AtomicLong(0);
+    private final Map<String, AtomicLong> worldHeartbeatSeq = new ConcurrentHashMap<>();
 
     private volatile String activeHostedWorldName = null;
     private volatile boolean activeHostedUseDrive = false;
@@ -889,7 +889,8 @@ public class SharedWorldManager {
             this.activeHostedSessionId = sessionId;
             this.activeRoomCode = roomCode;
             this.activeModeName = mode.name();
-            final long sessionSeq = heartbeatSessionSeq.incrementAndGet();
+            final AtomicLong worldSeqCounter = worldHeartbeatSeq.computeIfAbsent(worldName, k -> new AtomicLong(0));
+            final long sessionSeq = worldSeqCounter.incrementAndGet();
 
             ScheduledExecutorService newExec = Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "FabricP2P-SharedWorld-Heartbeat");
@@ -902,7 +903,7 @@ public class SharedWorldManager {
                 String currentWorld = activeHostedWorldName;
                 String currentRoom = activeRoomCode;
                 String currentMode = activeModeName;
-                if (heartbeatSessionSeq.get() != sessionSeq
+                if (worldSeqCounter.get() != sessionSeq
                         || !worldName.equals(currentWorld)
                         || currentRoom == null) {
                     return;
@@ -924,6 +925,7 @@ public class SharedWorldManager {
         String sessionId;
         boolean useDrive;
         long stoppedSeq;
+        AtomicLong worldSeqCounter;
         ScheduledExecutorService stoppedHeartbeat;
         synchronized (heartbeatLock) {
             worldName = this.activeHostedWorldName;
@@ -937,7 +939,10 @@ public class SharedWorldManager {
             this.activeHostedSessionId = null;
             this.activeRoomCode = null;
             this.activeModeName = null;
-            stoppedSeq = heartbeatSessionSeq.incrementAndGet();
+            worldSeqCounter = (worldName != null)
+                    ? worldHeartbeatSeq.computeIfAbsent(worldName, k -> new AtomicLong(0))
+                    : null;
+            stoppedSeq = (worldSeqCounter != null) ? worldSeqCounter.incrementAndGet() : 0L;
             stoppedHeartbeat = stopHeartbeat();
         }
 
@@ -1004,7 +1009,7 @@ public class SharedWorldManager {
                         return t;
                     });
                     exitLockRenewer.scheduleAtFixedRate(() -> {
-                        if (heartbeatSessionSeq.get() != stoppedSeq) {
+                        if (worldSeqCounter.get() != stoppedSeq) {
                             return;
                         }
                         if (useDrive) {
@@ -1035,7 +1040,7 @@ public class SharedWorldManager {
                     awaitHeartbeatTermination(exitLockRenewer);
                 }
                 awaitHeartbeatTermination(stoppedHeartbeat);
-                if (heartbeatSessionSeq.get() == stoppedSeq) {
+                if (worldSeqCounter.get() == stoppedSeq) {
                     if (useDrive) {
                         writeDriveSessionLock(worldName, false, hostName, "", "", sessionId);
                     } else {

@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.1.10+26.3
+- **CI & OAuth Build Fixes:** Added GitHub Actions secret injection (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`) to `build.yml` on `main` pushes so CI artifacts include Google Sign-In credentials alongside Release builds, and prevented custom user-configured OAuth Client IDs in `GoogleAuthService` from inheriting the bundled default Client Secret.
+- **Shared Worlds Concurrency & UI Polish:** Scoped `SharedWorldManager` heartbeat/exit-sync sequence tracking per world so starting P2P hosting on a different world never cancels an in-flight exit-sync lock renewal or skips releasing the previous world's `session.lock.json`, locked `enableFeatureCard` during active sync/sign-in operations in `SharedWorldsScreen`, and updated the README installation version.
+
 ## v2.1.9+26.3
 - **Shared Worlds & Google Auth Fixes:** Tracked in-flight exit-sync session IDs in `SharedWorldManager` so restarting P2P host while a previous exit sync is still finishing reports a clear exit-sync conflict message instead of falsely attributing the lock to another live host, guarded `resolveWorldDriveFolderId` against empty sanitized world names, and unwrapped `ExecutionException` in `GoogleAuthService.signInAsync` so browser OAuth cancellation errors display clean messages without raw `java.io.IOException:` prefixes.
 - **UDP Hole Punching Reliability:** Checked HTTP status codes in `UdpHolePunchService.publishSignal` so `ntfy.sh` rate-limit (`429`) or server (`5xx`) errors fail fast with a clear diagnostic instead of timing out silently, and closed the ephemeral local TCP `ServerSocket` immediately after accepting the single Minecraft client connection.
