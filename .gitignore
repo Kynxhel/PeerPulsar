@@ -9,6 +9,7 @@ MODRINTH_CURSEFORGE.md
 
 # Minecraft run directory
 run/
+logs/
 
 # IDE files
 .idea/

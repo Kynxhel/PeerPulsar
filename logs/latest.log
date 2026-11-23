@@ -1,4 +1,0 @@
-[23:18:31] [Test worker/WARN]: [GoogleAuth] Rejected id_token: no OAuth Client ID configured on host.
-[23:18:31] [Test worker/WARN]: [GoogleAuth] Rejected id_token: no OAuth Client ID configured on host.
-[23:18:31] [Test worker/WARN]: [GoogleAuth] Rejected id_token: no OAuth Client ID configured on host.
-[23:18:31] [Test worker/WARN]: [SharedWorlds] SHA-256 mismatch after copying 'level.dat' from sync folder
