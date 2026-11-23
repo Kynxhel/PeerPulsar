@@ -178,13 +178,19 @@ public class NetworkDiagnosticsService {
                     cgnat, coneNatSupported, tunnelAvailable, tunnelLatency
             );
             return report;
-        });
+        }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
 
         this.inFlightCheck = future;
         future.whenComplete((r, err) -> {
             synchronized (NetworkDiagnosticsService.this) {
                 if (this.inFlightCheck == future) {
                     this.inFlightCheck = null;
+                }
+                if (err != null) {
+                    FabricP2PMod.LOGGER.warn("[P2P-Diag] Diagnostics failed unexpectedly: {}", err.getMessage());
+                    if (this.status == P2PCompatibilityStatus.TESTING) {
+                        this.status = P2PCompatibilityStatus.IDLE;
+                    }
                 }
             }
         });

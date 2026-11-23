@@ -13,16 +13,16 @@ public class RoomCodeHelper {
     private static final String UDP_PREFIX = "UDP-";
     private static final Pattern IPV4_OR_HOST_PATTERN = Pattern.compile("^([a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?)(?::([0-9]{1,5}))?$");
     private static final Pattern IPV6_BRACKET_PATTERN = Pattern.compile("^\\[([0-9a-fA-F:]+)](?::([0-9]{1,5}))?$");
-    private static final Pattern EMBEDDED_UDP_CODE = Pattern.compile("(?i)UDP-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}");
-    private static final Pattern EMBEDDED_HEX_CODE = Pattern.compile("(?i)P2P-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}");
-    private static final Pattern EMBEDDED_B64_CODE = Pattern.compile("(?i)P2P-[A-Za-z0-9_-]{6,}");
+    private static final Pattern EMBEDDED_UDP_CODE = Pattern.compile("(?i)(?<![A-Za-z0-9_-])UDP-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}(?![A-Za-z0-9_-])");
+    private static final Pattern EMBEDDED_HEX_CODE = Pattern.compile("(?i)(?<![A-Za-z0-9_-])P2P-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}(?![A-Za-z0-9_-])");
+    private static final Pattern EMBEDDED_B64_CODE = Pattern.compile("(?i)(?<![A-Za-z0-9_-])P2P-[A-Za-z0-9_-]{6,}(?![A-Za-z0-9_-])");
 
     /**
      * Encodes an IPv4 address (or hostname/IPv6) and port into a clean, shareable Room Code.
      * Example: 85.102.50.21:25565 -> P2P-XXXX-XXXX-XXXX
      */
     public static String encodeRoomCode(String ip, int port) {
-        if (ip == null || ip.isBlank()) {
+        if (ip == null || ip.isBlank() || port < 1 || port > 65535) {
             return "";
         }
         try {
@@ -107,12 +107,28 @@ public class RoomCodeHelper {
 
         if (raw.toUpperCase().startsWith(UDP_PREFIX)) {
             String cleanUdp = raw.substring(UDP_PREFIX.length()).replace("-", "").trim();
-            if (cleanUdp.length() >= 8) {
+            if (cleanUdp.matches("^[0-9A-Za-z]{8,32}$")) {
                 return new ConnectionTarget(raw.toUpperCase(), 0, true);
             }
             return null;
         }
 
+        ConnectionTarget directDecoded = decodeSingleToken(raw);
+        if (directDecoded != null) {
+            return directDecoded;
+        }
+
+        Matcher b64Matcher = EMBEDDED_B64_CODE.matcher(input);
+        while (b64Matcher.find()) {
+            ConnectionTarget candidate = decodeSingleToken(b64Matcher.group(0));
+            if (candidate != null) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static ConnectionTarget decodeSingleToken(String raw) {
         if (raw.toUpperCase().startsWith(PREFIX)) {
             String payload = raw.substring(PREFIX.length()).trim();
 

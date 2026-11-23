@@ -90,4 +90,16 @@ class GoogleAuthServiceTest {
         assertNull(GoogleAuthService.verifyIdTokenWithGoogle(jwt, ""));
         assertNull(GoogleAuthService.verifyIdTokenWithGoogle(jwt, "   "));
     }
+
+    @Test
+    void audienceValidationRequiresExactAudMatch() {
+        String cid = "my-client-id.apps.googleusercontent.com";
+        assertTrue(GoogleAuthService.isValidAudience(cid, cid, ""));
+        assertTrue(GoogleAuthService.isValidAudience(cid, cid, cid));
+        assertFalse(GoogleAuthService.isValidAudience(cid, "other-client-id", cid),
+                "Matching azp must never override mismatched aud");
+        assertFalse(GoogleAuthService.isValidAudience(cid, cid, "other-azp"),
+                "Mismatched non-empty azp must be rejected");
+        assertFalse(GoogleAuthService.isValidAudience(cid, "", cid));
+    }
 }

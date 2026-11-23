@@ -58,6 +58,10 @@ public class SharedWorldsScreen extends Screen {
     private boolean busy = false;
     private boolean loadingWorlds = false;
     private boolean screenActive = true;
+    private boolean initialRefreshDone = false;
+    private boolean joiningUdp = false;
+    private boolean lastSyncedWorking = false;
+    private boolean lastSyncedSignedIn = false;
 
     private String toastMessage = null;
     private int toastAccent = NeonTheme.CYAN;
@@ -251,7 +255,10 @@ public class SharedWorldsScreen extends Screen {
         this.addRenderableWidget(backButton);
 
         updateWidgetStates();
-        refreshWorldsListAsync(false);
+        if (!this.initialRefreshDone) {
+            this.initialRefreshDone = true;
+            refreshWorldsListAsync(false);
+        }
     }
 
     private static String safeHostName(String name) {
@@ -347,15 +354,17 @@ public class SharedWorldsScreen extends Screen {
             if (target.isUdpHolePunch()) {
                 String hostName = safeHostName(entry.liveHostName());
                 this.busy = true;
+                this.joiningUdp = true;
                 updateWidgetStates();
                 showToast(tr("screen.fabricp2p.shared.toast_joining_udp", hostName), NeonTheme.CYAN);
                 UdpHolePunchService.getInstance().startClientProxyAsync(target.host()).whenComplete((res, err) -> {
                     if (this.minecraft == null) return;
                     this.minecraft.execute(() -> {
                         this.busy = false;
+                        this.joiningUdp = false;
                         if (!this.screenActive) {
                             if (err == null && res != null && res.success()) {
-                                UdpHolePunchService.getInstance().stopClientProxy();
+                                UdpHolePunchService.getInstance().stopClientProxyIfPort(res.localPort());
                             }
                             return;
                         }
@@ -430,7 +439,6 @@ public class SharedWorldsScreen extends Screen {
             return;
         }
         this.busy = true;
-        updateWidgetStates();
         showToast(tr("screen.fabricp2p.shared.toast_google_opening"), NeonTheme.CYAN);
         auth.signInAsync().whenComplete((res, err) -> {
             if (this.minecraft == null) return;
@@ -449,6 +457,7 @@ public class SharedWorldsScreen extends Screen {
                 }
             });
         });
+        updateWidgetStates();
     }
 
     private void handleUploadCurrentWorld() {
@@ -477,9 +486,13 @@ public class SharedWorldsScreen extends Screen {
 
     private void updateWidgetStates() {
         boolean enabled = config.isEnabled();
-        boolean backendReady = enabled && (config.hasValidSyncFolder() || config.isGoogleSignedIn());
+        boolean signedIn = config.isGoogleSignedIn();
+        boolean backendReady = enabled && (config.hasValidSyncFolder() || signedIn);
         boolean inSingleplayer = this.minecraft != null && this.minecraft.getSingleplayerServer() != null;
-        boolean working = busy || manager.isSyncing() || GoogleAuthService.getInstance().isSigningIn();
+        boolean bgWorking = manager.isSyncing() || GoogleAuthService.getInstance().isSigningIn();
+        this.lastSyncedWorking = bgWorking;
+        this.lastSyncedSignedIn = signedIn;
+        boolean working = busy || bgWorking;
 
         if (autoSyncExitCard != null) autoSyncExitCard.active = enabled && !working;
         if (googleSignInButton != null) {
@@ -633,13 +646,32 @@ public class SharedWorldsScreen extends Screen {
     }
 
     @Override
+    public void tick() {
+        super.tick();
+        boolean bgWorking = manager.isSyncing() || GoogleAuthService.getInstance().isSigningIn();
+        boolean signedIn = config.isGoogleSignedIn();
+        if (bgWorking != lastSyncedWorking || signedIn != lastSyncedSignedIn) {
+            boolean finishedBgWork = lastSyncedWorking && !bgWorking;
+            boolean authChanged = signedIn != lastSyncedSignedIn;
+            updateWidgetStates();
+            if ((finishedBgWork || authChanged) && !busy && !loadingWorlds) {
+                refreshWorldsListAsync(false);
+            }
+        }
+    }
+
+    @Override
     public void removed() {
         this.screenActive = false;
+        if (this.joiningUdp) {
+            this.joiningUdp = false;
+            UdpHolePunchService.getInstance().stopClientProxy();
+        }
         super.removed();
     }
 
     @Override
     public boolean isPauseScreen() {
-        return false;
+        return this.parent != null && this.parent.isPauseScreen();
     }
 }

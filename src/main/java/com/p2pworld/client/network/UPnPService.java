@@ -12,6 +12,7 @@ import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.SocketTimeoutException;
 import java.net.URI;
@@ -21,6 +22,8 @@ import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
@@ -39,6 +42,7 @@ public class UPnPService {
     private volatile int mappedPort = -1;
     private volatile boolean isMapped = false;
     private volatile UPnPStatus status = UPnPStatus.IDLE;
+    private ScheduledExecutorService leaseRenewer = null;
 
     private static final String[] SSDP_TARGETS = {
             "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
@@ -105,10 +109,16 @@ public class UPnPService {
     public GatewayProbeResult probeGateway(boolean testPortMapping) {
         synchronized (portLock) {
             this.localIp = resolveLocalIpAddress();
+            String prevControlUrl = this.controlUrl;
+            String prevServiceType = this.serviceType;
             this.controlUrl = null;
             this.serviceType = null;
             boolean found = discoverRouter();
             if (!found) {
+                if (this.isMapped) {
+                    this.controlUrl = prevControlUrl;
+                    this.serviceType = prevServiceType;
+                }
                 this.routerWanIp = null;
                 return new GatewayProbeResult(false, null, false);
             }
@@ -118,7 +128,7 @@ public class UPnPService {
             boolean canMapPort = false;
             if (testPortMapping && this.localIp != null && !this.localIp.startsWith("127.")) {
                 int probePort = 54321 + (int) (System.currentTimeMillis() % 4000);
-                if (addPortMapping(probePort, this.localIp, "TCP", "FabricP2P Diagnostic Probe")) {
+                if (addPortMapping(probePort, this.localIp, "TCP", "FabricP2P Diagnostic Probe") >= 0) {
                     canMapPort = true;
                     deletePortMapping(probePort, "TCP");
                 }
@@ -185,6 +195,7 @@ public class UPnPService {
                     return false;
                 }
                 try {
+                    stopLeaseRenewerLocked();
                     // Clean up any previously mapped port first
                     if (isMapped && mappedPort > 0 && mappedPort != port && controlUrl != null) {
                         try {
@@ -211,6 +222,7 @@ public class UPnPService {
                         return false;
                     }
 
+                    this.externalIp = null;
                     queryExternalIp();
                     if (externalIp == null || externalIp.isEmpty() || externalIp.equals("0.0.0.0")) {
                         resolveExternalIpFallback();
@@ -220,8 +232,20 @@ public class UPnPService {
                         return false;
                     }
 
-                    boolean success = addPortMapping(port, localIp, "TCP", description);
-                    if (success) {
+                    int grantedLease = addPortMapping(port, localIp, "TCP", description);
+                    if (grantedLease < 0 && this.controlUrl == null && this.mapAttemptGen.get() == attemptGen) {
+                        FabricP2PMod.LOGGER.info("[UPnP] Re-discovering gateway after stale control URL failure...");
+                        if (discoverRouter()) {
+                            this.externalIp = null;
+                            queryExternalIp();
+                            if (externalIp == null || externalIp.isEmpty() || externalIp.equals("0.0.0.0")) {
+                                resolveExternalIpFallback();
+                            }
+                            grantedLease = addPortMapping(port, localIp, "TCP", description);
+                        }
+                    }
+
+                    if (grantedLease >= 0) {
                         if (this.mapAttemptGen.get() != attemptGen) {
                             FabricP2PMod.LOGGER.info("[UPnP] Port {} mapping finished after timeout/cancel — deleting stray mapping.", port);
                             try {
@@ -232,7 +256,11 @@ public class UPnPService {
                         this.mappedPort = port;
                         this.isMapped = true;
                         this.status = UPnPStatus.SUCCESS;
-                        FabricP2PMod.LOGGER.info("[UPnP] Port {} mapped to {}. External IP: {}", port, localIp, externalIp);
+                        if (grantedLease > 0) {
+                            scheduleLeaseRenewalLocked(attemptGen, port, localIp, description, grantedLease);
+                        }
+                        FabricP2PMod.LOGGER.info("[UPnP] Port {} mapped to {}. External IP: {} (lease={}s)",
+                                port, localIp, externalIp, grantedLease);
                         return true;
                     } else {
                         if (this.mapAttemptGen.get() == attemptGen) {
@@ -249,13 +277,40 @@ public class UPnPService {
                     return false;
                 }
             }
+        }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
+    }
+
+    private void stopLeaseRenewerLocked() {
+        if (this.leaseRenewer != null) {
+            this.leaseRenewer.shutdownNow();
+            this.leaseRenewer = null;
+        }
+    }
+
+    private void scheduleLeaseRenewalLocked(long attemptGen, int port, String mappedLocalIp, String description, int leaseSec) {
+        stopLeaseRenewerLocked();
+        long intervalSec = Math.max(300L, (leaseSec * 3L) / 4L);
+        ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "FabricP2P-UPnP-Renew");
+            t.setDaemon(true);
+            return t;
         });
+        this.leaseRenewer = exec;
+        exec.scheduleAtFixedRate(() -> {
+            synchronized (portLock) {
+                if (!isMapped || mappedPort != port || mapAttemptGen.get() != attemptGen) {
+                    return;
+                }
+                sendAddPortMapping(port, mappedLocalIp, "TCP", description, leaseSec);
+            }
+        }, intervalSec, intervalSec, TimeUnit.SECONDS);
     }
 
     public CompletableFuture<Void> closePortAsync() {
         this.mapAttemptGen.incrementAndGet();
         return CompletableFuture.runAsync(() -> {
             synchronized (portLock) {
+                stopLeaseRenewerLocked();
                 if (isMapped && mappedPort > 0 && controlUrl != null) {
                     try {
                         deletePortMapping(mappedPort, "TCP");
@@ -268,12 +323,22 @@ public class UPnPService {
                 mappedPort = -1;
                 status = UPnPStatus.IDLE;
             }
-        });
+        }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
+    }
+
+    private DatagramSocket createSsdpSocket() throws IOException {
+        String ip = this.localIp;
+        if (ip != null && !ip.isBlank() && !ip.startsWith("127.")) {
+            try {
+                return new DatagramSocket(new InetSocketAddress(InetAddress.getByName(ip), 0));
+            } catch (Exception ignored) {}
+        }
+        return new DatagramSocket();
     }
 
     private boolean discoverRouter() {
         Set<String> triedLocations = new HashSet<>();
-        try (DatagramSocket socket = new DatagramSocket()) {
+        try (DatagramSocket socket = createSsdpSocket()) {
             socket.setSoTimeout(1500);
             InetAddress group = InetAddress.getByName("239.255.255.250");
 
@@ -343,12 +408,15 @@ public class UPnPService {
         return false;
     }
 
-    private boolean addPortMapping(int port, String localIpAddr, String protocol, String description) {
+    private int addPortMapping(int port, String localIpAddr, String protocol, String description) {
         if (sendAddPortMapping(port, localIpAddr, protocol, description, 0)) {
-            return true;
+            return 0;
         }
         // Some IGDv2 routers reject leaseDuration=0; retry with a 1-hour lease
-        return sendAddPortMapping(port, localIpAddr, protocol, description, 3600);
+        if (sendAddPortMapping(port, localIpAddr, protocol, description, 3600)) {
+            return 3600;
+        }
+        return -1;
     }
 
     private boolean sendAddPortMapping(int port, String localIpAddr, String protocol, String description, int leaseDuration) {

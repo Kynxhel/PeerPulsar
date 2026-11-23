@@ -149,11 +149,11 @@ public class TunnelRelayService {
                     closeQuietly(ctrl);
                 }
                 if (tunnelGeneration.get() == gen) {
-                    stopTunnel();
+                    stopTunnelIfGeneration(gen);
                 }
                 return new TunnelStartResult(false, null, -1, e.getMessage());
             }
-        });
+        }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
     }
 
     private void runControlLoop(Socket ctrl, int localPort) {
@@ -196,6 +196,12 @@ public class TunnelRelayService {
                 if (this.controlSocket == ctrl) {
                     this.active = false;
                     this.controlSocket = null;
+                    this.remotePort = -1;
+                    this.localTargetPort = -1;
+                    for (Socket s : activeProxySockets) {
+                        closeQuietly(s);
+                    }
+                    activeProxySockets.clear();
                 }
             }
             closeQuietly(ctrl);
@@ -298,6 +304,15 @@ public class TunnelRelayService {
         } catch (IOException ignored) {
             closeQuietly(from);
             closeQuietly(to);
+        }
+    }
+
+    private void stopTunnelIfGeneration(long expectedGen) {
+        synchronized (this) {
+            if (tunnelGeneration.get() != expectedGen) {
+                return;
+            }
+            stopTunnel();
         }
     }
 

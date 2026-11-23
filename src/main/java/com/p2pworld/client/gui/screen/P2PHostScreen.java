@@ -529,9 +529,10 @@ public class P2PHostScreen extends Screen {
         if (cheatsCard != null) cheatsCard.active = !active && !busy;
 
         boolean canSwitchMode = !active && !busy;
-        if (directModeCard != null) directModeCard.active = canSwitchMode;
-        if (udpPunchModeCard != null) udpPunchModeCard.active = canSwitchMode;
-        if (tunnelModeCard != null) tunnelModeCard.active = canSwitchMode;
+        NetworkDiagnosticsService.DiagnosticReport report = diag.getLastReport();
+        if (directModeCard != null) directModeCard.active = canSwitchMode && !testing && networkManager.isModeSupported(ConnectionMode.DIRECT_UPNP, report);
+        if (udpPunchModeCard != null) udpPunchModeCard.active = canSwitchMode && !testing && networkManager.isModeSupported(ConnectionMode.UDP_HOLE_PUNCH, report);
+        if (tunnelModeCard != null) tunnelModeCard.active = canSwitchMode && !testing && networkManager.isModeSupported(ConnectionMode.TUNNEL_RELAY, report);
         if (lanModeCard != null) lanModeCard.active = canSwitchMode;
     }
 

@@ -29,11 +29,12 @@ public class FabricP2PClient implements ClientModInitializer {
                 ClientPlayNetworking.send(new P2PIdentityPayloads.GoogleIdentityC2SPayload(""));
                 return;
             }
-            CompletableFuture.supplyAsync(() -> GoogleAuthService.getInstance().getValidIdToken())
+            CompletableFuture.supplyAsync(() -> GoogleAuthService.getInstance().getValidIdToken(), P2PNetworkManager.NETWORK_IO_EXECUTOR)
                     .thenAccept(idToken -> client.execute(() -> {
-                        if (client.getConnection() != null
+                        if (client.getConnection() == handler
                                 && ClientPlayNetworking.canSend(P2PIdentityPayloads.GoogleIdentityC2SPayload.TYPE)) {
-                            String tokenToSend = (SharedWorldConfig.getInstance().isEnabled() && idToken != null)
+                            SharedWorldConfig currentCfg = SharedWorldConfig.getInstance();
+                            String tokenToSend = (currentCfg.isEnabled() && currentCfg.isGoogleSignedIn() && idToken != null)
                                     ? idToken
                                     : "";
                             ClientPlayNetworking.send(new P2PIdentityPayloads.GoogleIdentityC2SPayload(tokenToSend));
@@ -47,9 +48,18 @@ public class FabricP2PClient implements ClientModInitializer {
                 (payload, context) -> {
                     context.client().execute(() -> {
                         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
+                        if (!cfg.isEnabled() || !cfg.isGoogleSignedIn()) {
+                            return;
+                        }
                         String folderId = payload.worldFolderId() != null ? payload.worldFolderId().trim() : "";
                         String safeName = SharedWorldManager.sanitizeName(payload.worldName());
                         if (!folderId.isBlank() && folderId.matches("^[a-zA-Z0-9_-]{8,128}$") && !safeName.isEmpty()) {
+                            String existing = cfg.getLinkedDriveFolderId(safeName);
+                            if (existing != null && !existing.isBlank() && !existing.equals(folderId)) {
+                                FabricP2PMod.LOGGER.warn("[SharedWorlds] Ignored conflicting Drive world grant for '{}' (existing={}, incoming={}).",
+                                        safeName, existing, folderId);
+                                return;
+                            }
                             cfg.putLinkedDriveWorld(safeName, folderId);
                             cfg.setLastSharedWorldName(safeName);
                             if (context.client().player != null) {

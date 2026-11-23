@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.p2pworld.FabricP2PMod;
+import com.p2pworld.client.network.P2PNetworkManager;
 import com.sun.net.httpserver.HttpServer;
 
 import java.awt.Desktop;
@@ -28,6 +29,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Pure-Java Google OAuth 2.0 Desktop Loopback + PKCE (RFC 8252) Sign-In Client.
@@ -67,6 +69,8 @@ public class GoogleAuthService {
     private static GoogleAuthService instance;
     private final AtomicBoolean signingIn = new AtomicBoolean(false);
     private final Object tokenRefreshLock = new Object();
+    private final Object authCommitLock = new Object();
+    private final AtomicLong authGeneration = new AtomicLong(0);
 
     private String resolveClientId() {
         String custom = SharedWorldConfig.getInstance().getGoogleClientId();
@@ -96,7 +100,11 @@ public class GoogleAuthService {
     }
 
     public void signOut() {
-        SharedWorldConfig.getInstance().clearGoogleAuth();
+        synchronized (authCommitLock) {
+            authGeneration.incrementAndGet();
+            SharedWorldConfig.getInstance().clearGoogleAuth();
+            SharedWorldManager.getInstance().clearDriveCache();
+        }
         FabricP2PMod.LOGGER.info("[GoogleAuth] Signed out.");
     }
 
@@ -130,8 +138,30 @@ public class GoogleAuthService {
 
                     CompletableFuture<String> codeFuture = new CompletableFuture<>();
                     server.createContext("/callback", exchange -> {
-                        String query = exchange.getRequestURI().getRawQuery();
-                        Map<String, String> params = parseQuery(query);
+                        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            exchange.getResponseHeaders().set("Cache-Control", "no-store");
+                            exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+                            exchange.sendResponseHeaders(405, -1);
+                            exchange.close();
+                            return;
+                        }
+
+                        Map<String, String> params;
+                        try {
+                            String query = exchange.getRequestURI().getRawQuery();
+                            params = parseQuery(query);
+                        } catch (IllegalArgumentException badQuery) {
+                            byte[] badBody = "<html><body><h1>Bad Request</h1></body></html>".getBytes(StandardCharsets.UTF_8);
+                            exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+                            exchange.getResponseHeaders().set("Cache-Control", "no-store");
+                            exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+                            exchange.sendResponseHeaders(400, badBody.length);
+                            try (OutputStream os = exchange.getResponseBody()) {
+                                os.write(badBody);
+                            }
+                            return;
+                        }
+
                         String code = params.get("code");
                         String state = params.get("state");
                         String err = params.get("error");
@@ -162,6 +192,10 @@ public class GoogleAuthService {
 
                         byte[] body = html.getBytes(StandardCharsets.UTF_8);
                         exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+                        exchange.getResponseHeaders().set("Cache-Control", "no-store");
+                        exchange.getResponseHeaders().set("Pragma", "no-cache");
+                        exchange.getResponseHeaders().set("Referrer-Policy", "no-referrer");
+                        exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
                         exchange.sendResponseHeaders(statusCode, body.length);
                         try (OutputStream os = exchange.getResponseBody()) {
                             os.write(body);
@@ -226,23 +260,27 @@ public class GoogleAuthService {
                         return new AuthResult(false, null, "Could not retrieve verified email address from Google.");
                     }
 
-                    // Ensure we have a refresh token (newly issued or already stored for this exact account)
-                    boolean sameAccount = !cfg.getGoogleUserEmail().isBlank()
-                            && cfg.getGoogleUserEmail().equalsIgnoreCase(email);
-                    String existingRefreshForSameEmail = sameAccount ? cfg.getGoogleRefreshToken() : "";
-                    if (refreshToken.isBlank() && existingRefreshForSameEmail.isBlank()) {
-                        return new AuthResult(
-                                false,
-                                null,
-                                "Google did not return a refresh token. Please revoke previous access at myaccount.google.com/permissions and sign in again."
-                        );
-                    }
+                    // Ensure we have a refresh token and commit atomically under authCommitLock
+                    synchronized (authCommitLock) {
+                        boolean sameAccount = !cfg.getGoogleUserEmail().isBlank()
+                                && cfg.getGoogleUserEmail().equalsIgnoreCase(email);
+                        String existingRefreshForSameEmail = sameAccount ? cfg.getGoogleRefreshToken() : "";
+                        if (refreshToken.isBlank() && existingRefreshForSameEmail.isBlank()) {
+                            return new AuthResult(
+                                    false,
+                                    null,
+                                    "Google did not return a refresh token. Please revoke previous access at myaccount.google.com/permissions and sign in again."
+                            );
+                        }
 
-                    // Clear any previous account's folder bindings if switching accounts
-                    if (!cfg.getGoogleUserEmail().isBlank() && !sameAccount) {
-                        cfg.clearGoogleAuth();
+                        authGeneration.incrementAndGet();
+                        // Clear any previous account's folder bindings if switching accounts
+                        if (!cfg.getGoogleUserEmail().isBlank() && !sameAccount) {
+                            cfg.clearGoogleAuth();
+                            SharedWorldManager.getInstance().clearDriveCache();
+                        }
+                        cfg.setGoogleTokens(accessToken, refreshToken, idToken, expiryMs, email);
                     }
-                    cfg.setGoogleTokens(accessToken, refreshToken, idToken, expiryMs, email);
 
                     FabricP2PMod.LOGGER.info("[GoogleAuth] Signed in successfully as {}", email);
                     return new AuthResult(true, email, null);
@@ -255,7 +293,7 @@ public class GoogleAuthService {
                         server.stop(1);
                     }
                 }
-            });
+            }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
         } catch (RuntimeException e) {
             this.signingIn.set(false);
             throw e;
@@ -327,11 +365,13 @@ public class GoogleAuthService {
             try {
                 refreshTokensLocked(cfg);
                 String refreshed = cfg.getGoogleIdToken();
-                if (isJwtUnexpired(refreshed, 30_000L)) {
+                if (isJwtUnexpired(refreshed, 5_000L)) {
                     return refreshed;
                 }
-                cfg.clearGoogleIdToken();
-                FabricP2PMod.LOGGER.warn("[GoogleAuth] Token refresh did not return a fresh unexpired id_token; cleared stale id_token.");
+                if (!refreshed.isBlank() && !isJwtUnexpired(refreshed, 0L)) {
+                    cfg.clearGoogleIdToken();
+                }
+                FabricP2PMod.LOGGER.warn("[GoogleAuth] Token refresh did not return a fresh unexpired id_token.");
                 return "";
             } catch (Exception e) {
                 if (isJwtUnexpired(cached, 5_000L)) {
@@ -348,6 +388,15 @@ public class GoogleAuthService {
     }
 
     private void refreshTokensLocked(SharedWorldConfig cfg) throws IOException {
+        final long capturedGen;
+        final String refreshToken;
+        synchronized (authCommitLock) {
+            capturedGen = authGeneration.get();
+            refreshToken = cfg.getGoogleRefreshToken();
+            if (!cfg.isGoogleSignedIn() || refreshToken.isBlank()) {
+                throw new IOException("Not signed in with Google");
+            }
+        }
         String clientId = resolveClientId();
         if (clientId.isBlank()) {
             throw new IOException("Google OAuth Client ID is missing");
@@ -358,7 +407,7 @@ public class GoogleAuthService {
         if (!secret.isBlank()) {
             form.append("&client_secret=").append(enc(secret));
         }
-        form.append("&refresh_token=").append(enc(cfg.getGoogleRefreshToken()));
+        form.append("&refresh_token=").append(enc(refreshToken));
         form.append("&grant_type=refresh_token");
 
         JsonObject resp = postFormJson(TOKEN_URL, form.toString());
@@ -377,11 +426,16 @@ public class GoogleAuthService {
                 : 3600;
         boolean hasFreshIdToken = !newIdToken.isBlank() && isJwtUnexpired(newIdToken, 0L);
 
-        cfg.setGoogleTokens(newAccess, newRefresh, hasFreshIdToken ? newIdToken : "",
-                System.currentTimeMillis() + Math.max(60, expiresIn - 60) * 1000L, null);
+        synchronized (authCommitLock) {
+            if (authGeneration.get() != capturedGen || !cfg.isGoogleSignedIn()) {
+                throw new IOException("Signed out or switched accounts during token refresh");
+            }
+            cfg.setGoogleTokens(newAccess, newRefresh, hasFreshIdToken ? newIdToken : "",
+                    System.currentTimeMillis() + Math.max(60, expiresIn - 60) * 1000L, null);
 
-        if (!hasFreshIdToken && !cfg.getGoogleIdToken().isBlank() && !isJwtUnexpired(cfg.getGoogleIdToken(), 0L)) {
-            cfg.clearGoogleIdToken();
+            if (!hasFreshIdToken && !cfg.getGoogleIdToken().isBlank() && !isJwtUnexpired(cfg.getGoogleIdToken(), 0L)) {
+                cfg.clearGoogleIdToken();
+            }
         }
     }
 
@@ -423,7 +477,7 @@ public class GoogleAuthService {
             }
             String aud = (obj.has("aud") && !obj.get("aud").isJsonNull()) ? obj.get("aud").getAsString().trim() : "";
             String azp = (obj.has("azp") && !obj.get("azp").isJsonNull()) ? obj.get("azp").getAsString().trim() : "";
-            if (!trimmedClientId.equals(aud) && !trimmedClientId.equals(azp)) {
+            if (!isValidAudience(trimmedClientId, aud, azp)) {
                 FabricP2PMod.LOGGER.warn("[GoogleAuth] Rejected id_token: aud/azp mismatch (aud='{}', azp='{}').", aud, azp);
                 return null;
             }
@@ -454,6 +508,17 @@ public class GoogleAuthService {
             FabricP2PMod.LOGGER.warn("[GoogleAuth] id_token verification failed: {}", e.getMessage());
             return null;
         }
+    }
+
+    static boolean isValidAudience(String expectedClientId, String aud, String azp) {
+        if (expectedClientId == null || expectedClientId.isBlank() || aud == null || aud.isBlank()) {
+            return false;
+        }
+        String trimmedClientId = expectedClientId.trim();
+        if (!trimmedClientId.equals(aud.trim())) {
+            return false;
+        }
+        return azp == null || azp.isBlank() || trimmedClientId.equals(azp.trim());
     }
 
     public static void openBrowser(String url) {
@@ -490,7 +555,13 @@ public class GoogleAuthService {
                 return null;
             }
             JsonObject obj = JsonParser.parseString(resp.body()).getAsJsonObject();
-            if (obj.has("email")) {
+            String emailVerified = (obj.has("email_verified") && !obj.get("email_verified").isJsonNull())
+                    ? obj.get("email_verified").getAsString()
+                    : "false";
+            if (!"true".equalsIgnoreCase(emailVerified)) {
+                return null;
+            }
+            if (obj.has("email") && !obj.get("email").isJsonNull()) {
                 String email = obj.get("email").getAsString().trim();
                 if (email.contains("@")) {
                     return email;

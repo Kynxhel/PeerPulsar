@@ -141,6 +141,12 @@ public class P2PJoinScreen extends Screen {
 
     private void syncButtonStates() {
         boolean valid = (this.parsedTarget != null);
+        if (this.inputField != null) {
+            this.inputField.active = !this.isPunching;
+        }
+        if (this.pasteButton != null) {
+            this.pasteButton.active = !this.isPunching;
+        }
         if (this.connectButton != null) {
             this.connectButton.active = valid && !this.isPunching;
             this.connectButton.setPulsingBeacon(valid && !this.isPunching);
@@ -220,7 +226,7 @@ public class P2PJoinScreen extends Screen {
                     this.isPunching = false;
                     if (!this.screenActive) {
                         if (err == null && res != null && res.success()) {
-                            UdpHolePunchService.getInstance().stopClientProxy();
+                            UdpHolePunchService.getInstance().stopClientProxyIfPort(res.localPort());
                         }
                         return;
                     }
@@ -330,7 +336,9 @@ public class P2PJoinScreen extends Screen {
         graphics.outline(panelLeft + 12, teleY, panelW - 24, teleH, NeonTheme.withAlpha(cardAccent, 75));
 
         if (isPunching) {
-            String targetText = currentTarget != null ? currentTarget.host() : activeOpTargetLabel;
+            String targetText = (activeOpTargetLabel != null && !activeOpTargetLabel.isBlank())
+                    ? activeOpTargetLabel
+                    : (currentTarget != null ? currentTarget.host() : "");
             graphics.text(this.font, tr("screen.fabricp2p.join.punching_status", targetText),
                     panelLeft + 20, teleY + 8, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
             NeonRenderUtils.drawScannerBar(graphics, panelLeft + 20, teleY + 24, panelW - 40, NeonTheme.CYAN, timeSec);
@@ -390,6 +398,10 @@ public class P2PJoinScreen extends Screen {
     @Override
     public void removed() {
         this.screenActive = false;
+        if (this.isPunching) {
+            this.isPunching = false;
+            UdpHolePunchService.getInstance().stopClientProxy();
+        }
         super.removed();
     }
 

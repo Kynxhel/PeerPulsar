@@ -181,4 +181,23 @@ class RoomCodeHelperTest {
         assertEquals("[2001:db8::1]:25565", RoomCodeHelper.formatHostPort("2001:db8::1", 25565));
         assertEquals("[2001:db8::1]:25565", RoomCodeHelper.formatHostPort("[2001:db8::1]", 25565));
     }
+
+    @Test
+    void rejectsOutOfRangePortsAndInvalidUdpCharacters() {
+        assertEquals("", RoomCodeHelper.encodeRoomCode("85.102.50.21", 0));
+        assertEquals("", RoomCodeHelper.encodeRoomCode("85.102.50.21", -1));
+        assertEquals("", RoomCodeHelper.encodeRoomCode("85.102.50.21", 65536));
+        assertNull(RoomCodeHelper.decodeRoomCode("UDP-my room code"));
+        assertNull(RoomCodeHelper.decodeRoomCode("UDP-../other"));
+    }
+
+    @Test
+    void decodesRealBase64CodeEvenAfterDecoyPrefixInMessage() {
+        String realCode = RoomCodeHelper.encodeRoomCode("bore.pub", 41234);
+        String msg = "Join my P2P-server at " + realCode + "!";
+        RoomCodeHelper.ConnectionTarget target = RoomCodeHelper.decodeRoomCode(msg);
+        assertNotNull(target);
+        assertEquals("bore.pub", target.host());
+        assertEquals(41234, target.port());
+    }
 }

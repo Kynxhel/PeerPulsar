@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Pure-Java Google Drive API v3 helper built on java.net.http.HttpClient.
@@ -300,35 +301,45 @@ public class GoogleDriveService {
 
     public boolean downloadFileById(String fileId, Path destFile) throws IOException {
         if (fileId == null || fileId.isBlank()) return false;
-        String token = GoogleAuthService.getInstance().getValidAccessToken();
-        HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create(DRIVE_API + "/" + encPathSegment(fileId) + "?alt=media"))
-                .timeout(Duration.ofMinutes(2))
-                .header("Authorization", "Bearer " + token)
-                .GET()
-                .build();
         Path parent = destFile.getParent();
-        Path tmpFile = destFile.resolveSibling(destFile.getFileName().toString() + ".p2p.tmp");
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Path tmpFile = Files.createTempFile(parent != null ? parent : Path.of("."),
+                "." + destFile.getFileName().toString() + ".", ".p2p.tmp");
         boolean moved = false;
         try {
-            HttpResponse<InputStream> resp = HTTP.send(req, HttpResponse.BodyHandlers.ofInputStream());
-            try (InputStream in = resp.body()) {
-                if (resp.statusCode() != 200) {
-                    return false;
+            String token = GoogleAuthService.getInstance().getValidAccessToken();
+            int maxAttempts = 3;
+            HttpResponse<Path> resp = null;
+            for (int attempt = 0; attempt < maxAttempts; attempt++) {
+                HttpRequest req = HttpRequest.newBuilder()
+                        .uri(URI.create(DRIVE_API + "/" + encPathSegment(fileId) + "?alt=media"))
+                        .timeout(Duration.ofMinutes(2))
+                        .header("Authorization", "Bearer " + token)
+                        .GET()
+                        .build();
+                resp = HTTP.send(req, HttpResponse.BodyHandlers.ofFile(tmpFile));
+                int status = resp.statusCode();
+                if (status == 200) {
+                    break;
                 }
-                if (parent != null) {
-                    Files.createDirectories(parent);
+                if (isRetryableStatus(status) && attempt < maxAttempts - 1) {
+                    sleepBackoff(attempt, resp.headers().firstValue("Retry-After").orElse(null));
+                    continue;
                 }
-                long copied;
-                try (OutputStream out = Files.newOutputStream(tmpFile)) {
-                    copied = in.transferTo(out);
-                }
-                if (resp.headers().firstValue("Content-Encoding").isEmpty()) {
-                    OptionalLong expectedLen = resp.headers().firstValueAsLong("Content-Length");
-                    if (expectedLen.isPresent() && expectedLen.getAsLong() >= 0 && copied != expectedLen.getAsLong()) {
-                        throw new IOException("Incomplete Drive download: expected "
-                                + expectedLen.getAsLong() + " bytes, got " + copied);
-                    }
+                FabricP2PMod.LOGGER.warn("[GoogleDrive] Download failed for file {} (HTTP {})", fileId, status);
+                return false;
+            }
+            if (resp == null || resp.statusCode() != 200) {
+                return false;
+            }
+            if (resp.headers().firstValue("Content-Encoding").isEmpty()) {
+                OptionalLong expectedLen = resp.headers().firstValueAsLong("Content-Length");
+                long actualLen = Files.size(tmpFile);
+                if (expectedLen.isPresent() && expectedLen.getAsLong() >= 0 && actualLen != expectedLen.getAsLong()) {
+                    throw new IOException("Incomplete Drive download: expected "
+                            + expectedLen.getAsLong() + " bytes, got " + actualLen);
                 }
             }
             try {
@@ -360,8 +371,28 @@ public class GoogleDriveService {
                     .header("Authorization", "Bearer " + token)
                     .DELETE()
                     .build();
-            sendString(req);
-        } catch (Exception ignored) {}
+            HttpResponse<String> resp = sendString(req);
+            int status = resp.statusCode();
+            if (status == 403) {
+                // Non-owner Editors cannot permanently DELETE; move to trash via PATCH instead
+                HttpRequest trashReq = HttpRequest.newBuilder()
+                        .uri(URI.create(DRIVE_API + "/" + encPathSegment(fileId)))
+                        .timeout(Duration.ofSeconds(10))
+                        .header("Authorization", "Bearer " + token)
+                        .header("Content-Type", "application/json; charset=UTF-8")
+                        .method("PATCH", HttpRequest.BodyPublishers.ofString("{\"trashed\":true}", StandardCharsets.UTF_8))
+                        .build();
+                HttpResponse<String> trashResp = sendString(trashReq);
+                if ((trashResp.statusCode() < 200 || trashResp.statusCode() >= 300) && trashResp.statusCode() != 404) {
+                    FabricP2PMod.LOGGER.warn("[GoogleDrive] Trash fallback failed for {} ({}): {}",
+                            fileId, trashResp.statusCode(), truncate(trashResp.body()));
+                }
+            } else if ((status < 200 || status >= 300) && status != 404) {
+                FabricP2PMod.LOGGER.warn("[GoogleDrive] Delete failed for {} ({}): {}", fileId, status, truncate(resp.body()));
+            }
+        } catch (Exception e) {
+            FabricP2PMod.LOGGER.warn("[GoogleDrive] Delete error for {}: {}", fileId, e.getMessage());
+        }
     }
 
     /**
@@ -456,7 +487,7 @@ public class GoogleDriveService {
                 .build();
 
         HttpResponse<String> resp = sendString(req);
-        if (resp.statusCode() >= 400) {
+        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
             throw new IOException("Drive multipart upload failed (" + resp.statusCode() + "): " + truncate(resp.body()));
         }
         return JsonParser.parseString(resp.body()).getAsJsonObject().get("id").getAsString();
@@ -497,7 +528,7 @@ public class GoogleDriveService {
                 .POST(HttpRequest.BodyPublishers.ofString(meta.toString(), StandardCharsets.UTF_8))
                 .build();
         HttpResponse<String> resp = sendString(req);
-        if (resp.statusCode() >= 400) {
+        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
             if (resp.statusCode() == 404 && parentId != null && parentId.equals(verifiedRootFolderId)) {
                 rootFolderVerifiedThisSession = false;
                 verifiedRootFolderId = null;
@@ -526,7 +557,7 @@ public class GoogleDriveService {
                     .GET()
                     .build();
             HttpResponse<String> resp = sendString(req);
-            if (resp.statusCode() >= 400) {
+            if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
                 throw new IOException("Drive query failed (" + resp.statusCode() + "): " + truncate(resp.body()));
             }
 
@@ -547,11 +578,37 @@ public class GoogleDriveService {
 
     private static HttpResponse<String> sendString(HttpRequest req) throws IOException {
         try {
-            return HTTP.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            int maxAttempts = 3;
+            HttpResponse<String> resp = null;
+            for (int attempt = 0; attempt < maxAttempts; attempt++) {
+                resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                if (!isRetryableStatus(resp.statusCode()) || attempt == maxAttempts - 1) {
+                    return resp;
+                }
+                sleepBackoff(attempt, resp.headers().firstValue("Retry-After").orElse(null));
+            }
+            return resp;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("HTTP request interrupted", e);
         }
+    }
+
+    private static boolean isRetryableStatus(int status) {
+        return status == 429 || status == 500 || status == 502 || status == 503 || status == 504;
+    }
+
+    private static void sleepBackoff(int attempt, String retryAfterHeader) throws InterruptedException {
+        long delayMs = 500L << Math.min(attempt, 3);
+        if (retryAfterHeader != null && !retryAfterHeader.isBlank()) {
+            try {
+                long retrySec = Long.parseLong(retryAfterHeader.trim());
+                if (retrySec > 0) {
+                    delayMs = Math.min(5000L, retrySec * 1000L);
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+        Thread.sleep(delayMs);
     }
 
     private static String escapeQuery(String s) {

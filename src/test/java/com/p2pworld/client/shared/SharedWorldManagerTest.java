@@ -93,6 +93,8 @@ class SharedWorldManagerTest {
 
         Path targetWorldDir = tempDir.resolve("saves").resolve("TestWorld");
         Files.createDirectories(targetWorldDir);
+        Path preExistingLevelDat = targetWorldDir.resolve("level.dat");
+        Files.writeString(preExistingLevelDat, "valid-local-world", StandardCharsets.UTF_8);
         Path preExistingExtra = targetWorldDir.resolve("keep_me.dat");
         Files.writeString(preExistingExtra, "do-not-prune", StandardCharsets.UTF_8);
 
@@ -101,7 +103,35 @@ class SharedWorldManagerTest {
 
         assertFalse(result.success(), "Pull must fail when copied file SHA-256 does not match manifest");
         assertTrue(result.message().contains("SHA-256"), "Error message should mention SHA-256: " + result.message());
+        assertEquals("valid-local-world", Files.readString(preExistingLevelDat, StandardCharsets.UTF_8),
+                "Staged pull must not overwrite valid local files when SHA-256 verification fails");
         assertTrue(Files.exists(preExistingExtra), "Incomplete pull must not prune existing local files");
+    }
+
+    @Test
+    void localPullRejectsEmptyManifestWithoutDeletingWorldFiles(@TempDir Path tempDir) throws Exception {
+        Path syncRoot = tempDir.resolve("sync");
+        Path sharedWorldDir = syncRoot.resolve("EmptyManifestWorld");
+        Files.createDirectories(sharedWorldDir.resolve("files"));
+        Files.writeString(sharedWorldDir.resolve("manifest.json"), """
+                {
+                  "revision": 4,
+                  "lastHost": "Alice",
+                  "updatedAtMs": 1700000000000,
+                  "files": {}
+                }
+                """, StandardCharsets.UTF_8);
+
+        Path targetWorldDir = tempDir.resolve("saves").resolve("EmptyManifestWorld");
+        Files.createDirectories(targetWorldDir);
+        Path levelDat = targetWorldDir.resolve("level.dat");
+        Files.writeString(levelDat, "keep-world-safe", StandardCharsets.UTF_8);
+
+        SharedWorldManager.SyncOpResult result = SharedWorldManager.getInstance()
+                .pullIncrementalFromLocalFolder(syncRoot.toString(), "EmptyManifestWorld", targetWorldDir);
+
+        assertFalse(result.success(), "Empty manifest must be rejected");
+        assertTrue(Files.exists(levelDat), "Empty manifest must not delete existing world files");
     }
 
     @Test

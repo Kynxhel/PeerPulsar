@@ -1,5 +1,6 @@
 package com.p2pworld;
 
+import com.p2pworld.client.network.P2PNetworkManager;
 import com.p2pworld.client.shared.GoogleAuthService;
 import com.p2pworld.client.shared.GoogleDriveService;
 import com.p2pworld.client.shared.SharedWorldConfig;
@@ -106,16 +107,17 @@ public class FabricP2PMod implements ModInitializer {
                     MinecraftServer server = context.server();
                     String idToken = payload.idToken();
 
-                    if (!PlayerIdentityGuard.tryBeginVerification(playerUuid)) {
+                    final long verifyToken = PlayerIdentityGuard.tryBeginVerificationToken(playerUuid);
+                    if (verifyToken == 0L) {
                         return;
                     }
 
                     // Verify OIDC id_token asynchronously with Google's tokeninfo endpoint (never trust raw client claims)
-                    CompletableFuture.supplyAsync(() -> GoogleAuthService.verifyIdTokenWithGoogle(idToken))
+                    CompletableFuture.supplyAsync(() -> GoogleAuthService.verifyIdTokenWithGoogle(idToken), P2PNetworkManager.NETWORK_IO_EXECUTOR)
                             .whenComplete((verified, err) -> {
                                 try {
                                     if (err != null) {
-                                        PlayerIdentityGuard.endVerificationAttempt(playerUuid);
+                                        PlayerIdentityGuard.endVerificationAttempt(playerUuid, verifyToken);
                                         LOGGER.warn("[IdentityGuard] Unexpected error verifying OIDC token: {}", err.getMessage());
                                         return;
                                     }
@@ -162,14 +164,14 @@ public class FabricP2PMod implements ModInitializer {
                                                     } catch (Exception e) {
                                                         LOGGER.warn("[SharedWorlds] Auto-share with {} failed: {}", verified.email(), e.getMessage());
                                                     }
-                                                });
+                                                }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
                                             }
                                         } finally {
-                                            PlayerIdentityGuard.endVerificationAttempt(playerUuid);
+                                            PlayerIdentityGuard.endVerificationAttempt(playerUuid, verifyToken);
                                         }
                                     });
                                 } catch (Throwable t) {
-                                    PlayerIdentityGuard.endVerificationAttempt(playerUuid);
+                                    PlayerIdentityGuard.endVerificationAttempt(playerUuid, verifyToken);
                                 }
                             });
                 }

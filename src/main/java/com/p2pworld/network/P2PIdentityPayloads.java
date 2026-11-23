@@ -23,7 +23,7 @@ public final class P2PIdentityPayloads {
 
         public static final StreamCodec<RegistryFriendlyByteBuf, GoogleIdentityC2SPayload> CODEC =
                 StreamCodec.composite(
-                        ByteBufCodecs.STRING_UTF8, GoogleIdentityC2SPayload::idToken,
+                        ByteBufCodecs.stringUtf8(8192), GoogleIdentityC2SPayload::idToken,
                         GoogleIdentityC2SPayload::new
                 );
 
@@ -39,8 +39,8 @@ public final class P2PIdentityPayloads {
 
         public static final StreamCodec<RegistryFriendlyByteBuf, SharedWorldGrantS2CPayload> CODEC =
                 StreamCodec.composite(
-                        ByteBufCodecs.STRING_UTF8, SharedWorldGrantS2CPayload::worldFolderId,
-                        ByteBufCodecs.STRING_UTF8, SharedWorldGrantS2CPayload::worldName,
+                        ByteBufCodecs.stringUtf8(256), SharedWorldGrantS2CPayload::worldFolderId,
+                        ByteBufCodecs.stringUtf8(256), SharedWorldGrantS2CPayload::worldName,
                         SharedWorldGrantS2CPayload::new
                 );
 
