@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.p2pworld.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "IntegratedServerMixin",
+    "ServerLoginPacketListenerImplMixin"
+  ],
+  "client": [
+    "PauseScreenMixin",
+    "TitleScreenMixin",
+    "JoinMultiplayerScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,24 @@
+# Gradle & Build outputs
+.gradle/
+build/
+out/
+
+# Local OAuth secrets (never committed to public GitHub)
+local.properties
+
+# Minecraft run directory
+run/
+
+# IDE files
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS files
+.DS_Store
+Thumbs.db

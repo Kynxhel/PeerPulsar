@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "fabricp2p",
+  "version": "${version}",
+  "name": "Fabric P2P World",
+  "description": "Sleek, open-source peer-to-peer world hosting and joining for Minecraft 26.3 with automatic UPnP port forwarding, smart room codes, live ping telemetry, and an animated neon glass UI.",
+  "authors": [
+    "Kynxhel"
+  ],
+  "contact": {
+    "homepage": "https://github.com/Kynxhel",
+    "sources": "https://github.com/Kynxhel/FabricP2PMod",
+    "issues": "https://github.com/Kynxhel/FabricP2PMod/issues"
+  },
+  "license": "MIT",
+  "icon": "assets/fabricp2p/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "main": [
+      "com.p2pworld.FabricP2PMod"
+    ],
+    "client": [
+      "com.p2pworld.client.FabricP2PClient"
+    ]
+  },
+  "mixins": [
+    "fabricp2p.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~26.3",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
