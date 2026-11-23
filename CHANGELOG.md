@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.1.1+26.3
+- **IdentityGuard & OIDC Security Hardening:** Fixed MC 26.3 local singleplayer host detection (`isLocalHostPlayer`), blocked world interactions and anchored position during the verification window, added OIDC `aud`/`azp` validation, real JWT `exp` expiry checking on token refresh, and stopped broadcasting Google `id_token` when Shared Worlds is disabled.
+- **Networking, RUDP & UPnP Reliability:** Fixed RUDP `TYPE_FIN` drain so server disconnect/kick messages are no longer lost, added client-side UDP IP/session validation and STUN Transaction ID checks, made Local LAN start instantaneously offline without waiting for internet diagnostics, fixed Vanilla LAN auth restoration after stopping Offline P2P, fixed UPnP gateway cache & namespaced XML IP parsing, and fixed `TunnelRelayService` stream tracking and silent-drop detection.
+- **Shared Cloud Worlds & Google Drive Stability:** Added concurrent sync locking, snapshot-based SHA-256 hashing/uploads, atomic file downloads, stale/trashed Drive root folder cache recovery, Unicode/Turkish world name preservation with Windows reserved-name protection, and fixed joining live UDP Shared Worlds from inside a singleplayer world.
+- **UI, Mixins, Packaging & Tests:** Added screen-bounds handling for TitleScreen and compact host layouts, fixed text overflows and null-safe host labels, filtered `oauth.properties` packaging in `build.gradle`, cleaned unused lang keys, and added JUnit 5 unit tests.
+
 ## v2.1.0+26.3
 - **Google Account Anti-Spoof Nickname Protection:** Binds each player's username to their Google account (`fabricp2p_identities.json`) so nobody can impersonate another player's nickname in Offline LAN worlds.
 - **Automatic Google Drive Auto-Sharing on Join:** When a friend signed into Google joins your Shared Cloud World, they are automatically granted Editor access to the world's Drive folder and auto-linked in their `Shared Worlds` menu — zero manual sharing required!
