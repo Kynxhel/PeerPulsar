@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
@@ -26,10 +27,12 @@ import java.util.function.Consumer;
 public class TunnelRelayService {
     private static final String RELAY_HOST = "bore.pub";
     private static final int RELAY_CONTROL_PORT = 7835;
+    private static final int MAX_CONCURRENT_STREAMS = 64;
 
     private static TunnelRelayService instance;
 
     private final AtomicLong tunnelGeneration = new AtomicLong(0);
+    private final AtomicInteger pendingOrActiveStreams = new AtomicInteger(0);
     private volatile boolean active = false;
     private volatile String remoteHost = RELAY_HOST;
     private volatile int remotePort = -1;
@@ -187,10 +190,13 @@ public class TunnelRelayService {
                 FabricP2PMod.LOGGER.warn("[P2P-Tunnel] Control connection closed: {}", e.getMessage());
             }
         } finally {
-            boolean wasUnexpected = active && (this.controlSocket == ctrl);
-            if (this.controlSocket == ctrl) {
-                this.active = false;
-                this.controlSocket = null;
+            boolean wasUnexpected;
+            synchronized (this) {
+                wasUnexpected = active && (this.controlSocket == ctrl);
+                if (this.controlSocket == ctrl) {
+                    this.active = false;
+                    this.controlSocket = null;
+                }
             }
             closeQuietly(ctrl);
             if (wasUnexpected) {
@@ -203,6 +209,13 @@ public class TunnelRelayService {
     }
 
     private void spawnConnectionProxy(Socket expectedCtrl, String uuid, int localPort) {
+        int current = pendingOrActiveStreams.incrementAndGet();
+        if (current > MAX_CONCURRENT_STREAMS) {
+            pendingOrActiveStreams.decrementAndGet();
+            FabricP2PMod.LOGGER.warn("[P2P-Tunnel] Max concurrent streams ({}) reached; dropping connection {}",
+                    MAX_CONCURRENT_STREAMS, uuid);
+            return;
+        }
         Thread proxyThread = new Thread(() -> {
             Socket remoteSock = null;
             Socket localSock = null;
@@ -249,6 +262,7 @@ public class TunnelRelayService {
             } catch (Exception e) {
                 FabricP2PMod.LOGGER.debug("[P2P-Tunnel] Proxy stream ended ({}): {}", uuid, e.getMessage());
             } finally {
+                pendingOrActiveStreams.decrementAndGet();
                 activeStreamTokens.remove(streamToken);
                 closeQuietly(remoteSock);
                 closeQuietly(localSock);
@@ -257,7 +271,12 @@ public class TunnelRelayService {
             }
         }, "FabricP2P-Proxy-Down");
         proxyThread.setDaemon(true);
-        proxyThread.start();
+        try {
+            proxyThread.start();
+        } catch (Throwable t) {
+            pendingOrActiveStreams.decrementAndGet();
+            FabricP2PMod.LOGGER.warn("[P2P-Tunnel] Failed to start proxy thread for {}: {}", uuid, t.getMessage());
+        }
     }
 
     private static void pipeBytes(Socket from, Socket to) {

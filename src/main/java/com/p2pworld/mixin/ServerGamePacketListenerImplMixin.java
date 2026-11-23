@@ -6,6 +6,7 @@ import net.minecraft.network.protocol.game.ServerboundChatCommandSignedPacket;
 import net.minecraft.network.protocol.game.ServerboundChatPacket;
 import net.minecraft.network.protocol.game.ServerboundContainerClickPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.network.protocol.game.ServerboundSetCreativeModeSlotPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import org.spongepowered.asm.mixin.Mixin;
@@ -32,6 +33,13 @@ public abstract class ServerGamePacketListenerImplMixin {
 
     @Inject(method = "handleContainerClick", at = @At("HEAD"), cancellable = true)
     private void onHandleContainerClick(ServerboundContainerClickPacket packet, CallbackInfo ci) {
+        if (this.player != null && PlayerIdentityGuard.isPendingVerification(this.player.getUUID())) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "handleSetCreativeModeSlot", at = @At("HEAD"), cancellable = true)
+    private void onHandleSetCreativeModeSlot(ServerboundSetCreativeModeSlotPacket packet, CallbackInfo ci) {
         if (this.player != null && PlayerIdentityGuard.isPendingVerification(this.player.getUUID())) {
             ci.cancel();
         }

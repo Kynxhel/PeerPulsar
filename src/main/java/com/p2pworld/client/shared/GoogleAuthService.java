@@ -393,6 +393,19 @@ public class GoogleAuthService {
         if (idToken == null || idToken.isBlank() || idToken.length() > 8192) {
             return null;
         }
+        String expectedClientId = GoogleAuthService.getInstance().resolveClientId();
+        return verifyIdTokenWithGoogle(idToken, expectedClientId);
+    }
+
+    static VerifiedGoogleIdentity verifyIdTokenWithGoogle(String idToken, String expectedClientId) {
+        if (idToken == null || idToken.isBlank() || idToken.length() > 8192) {
+            return null;
+        }
+        if (expectedClientId == null || expectedClientId.isBlank()) {
+            FabricP2PMod.LOGGER.warn("[GoogleAuth] Rejected id_token: no OAuth Client ID configured on host.");
+            return null;
+        }
+        String trimmedClientId = expectedClientId.trim();
         try {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(TOKENINFO_URL + "?id_token=" + enc(idToken.trim())))
@@ -408,14 +421,11 @@ public class GoogleAuthService {
             if (!iss.equals("https://accounts.google.com") && !iss.equals("accounts.google.com")) {
                 return null;
             }
-            String expectedClientId = GoogleAuthService.getInstance().resolveClientId();
-            if (expectedClientId != null && !expectedClientId.isBlank()) {
-                String aud = (obj.has("aud") && !obj.get("aud").isJsonNull()) ? obj.get("aud").getAsString().trim() : "";
-                String azp = (obj.has("azp") && !obj.get("azp").isJsonNull()) ? obj.get("azp").getAsString().trim() : "";
-                if (!expectedClientId.equals(aud) && !expectedClientId.equals(azp)) {
-                    FabricP2PMod.LOGGER.warn("[GoogleAuth] Rejected id_token: aud/azp mismatch (aud='{}', azp='{}').", aud, azp);
-                    return null;
-                }
+            String aud = (obj.has("aud") && !obj.get("aud").isJsonNull()) ? obj.get("aud").getAsString().trim() : "";
+            String azp = (obj.has("azp") && !obj.get("azp").isJsonNull()) ? obj.get("azp").getAsString().trim() : "";
+            if (!trimmedClientId.equals(aud) && !trimmedClientId.equals(azp)) {
+                FabricP2PMod.LOGGER.warn("[GoogleAuth] Rejected id_token: aud/azp mismatch (aud='{}', azp='{}').", aud, azp);
+                return null;
             }
             String emailVerified = (obj.has("email_verified") && !obj.get("email_verified").isJsonNull())
                     ? obj.get("email_verified").getAsString()

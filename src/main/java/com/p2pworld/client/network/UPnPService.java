@@ -136,6 +136,12 @@ public class UPnPService {
         return localIp;
     }
 
+    public String refreshLocalIp() {
+        String resolved = resolveLocalIpAddress();
+        this.localIp = resolved;
+        return resolved;
+    }
+
     public int getMappedPort() {
         return mappedPort;
     }

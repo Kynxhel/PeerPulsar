@@ -186,12 +186,12 @@ public class UdpHolePunchService {
                     }, 60, 60, TimeUnit.MILLISECONDS);
 
                     // UDP receive loop
-                    Thread recvThread = new Thread(() -> runHostUdpLoop(boundUdp, localMcPort), "FabricP2P-UDP-Host-Recv");
+                    Thread recvThread = new Thread(() -> runHostUdpLoop(gen, boundUdp, localMcPort), "FabricP2P-UDP-Host-Recv");
                     recvThread.setDaemon(true);
                     recvThread.start();
 
                     // Signaling listener loop (ntfy.sh streaming NDJSON)
-                    Thread signalThread = new Thread(() -> runHostSignalLoop(topic, boundUdp), "FabricP2P-UDP-Host-Signal");
+                    Thread signalThread = new Thread(() -> runHostSignalLoop(gen, topic, boundUdp), "FabricP2P-UDP-Host-Signal");
                     signalThread.setDaemon(true);
                     signalThread.start();
                 }
@@ -212,21 +212,23 @@ public class UdpHolePunchService {
         });
     }
 
-    private void runHostSignalLoop(String topic, DatagramSocket udp) {
-        while (hostActive) {
+    private void runHostSignalLoop(long gen, String topic, DatagramSocket udp) {
+        while (hostActive && hostGeneration.get() == gen) {
             HttpURLConnection conn = null;
             try {
                 conn = (HttpURLConnection) URI.create(SIGNAL_BASE + topic + "/json").toURL().openConnection();
                 conn.setConnectTimeout(6000);
                 conn.setReadTimeout(0);
-                this.hostSignalConn = conn;
-                if (!hostActive) {
-                    break;
+                synchronized (hostLock) {
+                    if (!hostActive || hostGeneration.get() != gen) {
+                        break;
+                    }
+                    this.hostSignalConn = conn;
                 }
 
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                     String line;
-                    while (hostActive && (line = reader.readLine()) != null) {
+                    while (hostActive && hostGeneration.get() == gen && (line = reader.readLine()) != null) {
                         if (line.isBlank()) continue;
                         try {
                             JsonObject env = JsonParser.parseString(line).getAsJsonObject();
@@ -247,6 +249,10 @@ public class UdpHolePunchService {
                                 continue;
                             }
 
+                            if (!hostActive || hostGeneration.get() != gen) {
+                                break;
+                            }
+
                             // Build reply safely with JsonObject
                             JsonObject replyObj = new JsonObject();
                             replyObj.addProperty("role", "host");
@@ -259,9 +265,9 @@ public class UdpHolePunchService {
                             // Actively punch toward the joiner's endpoint using bounded pool
                             InetSocketAddress peerAddr = new InetSocketAddress(parsedIp, peerPort);
                             ExecutorService exec = this.punchExecutor;
-                            if (exec != null && !exec.isShutdown()) {
+                            if (hostActive && hostGeneration.get() == gen && exec != null && !exec.isShutdown()) {
                                 exec.submit(() -> {
-                                    for (int i = 0; i < 20 && hostActive; i++) {
+                                    for (int i = 0; i < 20 && hostActive && hostGeneration.get() == gen && !udp.isClosed(); i++) {
                                         try {
                                             sendPacket(udp, peerAddr, TYPE_PUNCH, sessionId, 0, null, 0);
                                             Thread.sleep(100);
@@ -275,23 +281,31 @@ public class UdpHolePunchService {
                     }
                 }
             } catch (Exception e) {
-                if (hostActive) {
+                if (hostActive && hostGeneration.get() == gen) {
                     try { Thread.sleep(2000); } catch (InterruptedException ignored) { break; }
                 }
             } finally {
                 if (conn != null) {
+                    synchronized (hostLock) {
+                        if (this.hostSignalConn == conn) {
+                            this.hostSignalConn = null;
+                        }
+                    }
                     try { conn.disconnect(); } catch (Exception ignored) {}
                 }
             }
         }
     }
 
-    private void runHostUdpLoop(DatagramSocket udp, int localMcPort) {
+    private void runHostUdpLoop(long gen, DatagramSocket udp, int localMcPort) {
         byte[] buf = new byte[2048];
-        while (hostActive && !udp.isClosed()) {
+        while (hostActive && hostGeneration.get() == gen && !udp.isClosed()) {
             try {
                 DatagramPacket pkt = new DatagramPacket(buf, buf.length);
                 udp.receive(pkt);
+                if (!hostActive || hostGeneration.get() != gen) {
+                    break;
+                }
                 int len = pkt.getLength();
                 if (len < HEADER_SIZE || buf[0] != MAGIC_0 || buf[1] != MAGIC_1) continue;
 
@@ -319,7 +333,7 @@ public class UdpHolePunchService {
                     }
                 }
             } catch (IOException e) {
-                if (hostActive) {
+                if (hostActive && hostGeneration.get() == gen) {
                     FabricP2PMod.LOGGER.debug("[P2P-UDP] Host recv loop closed: {}", e.getMessage());
                 }
                 break;

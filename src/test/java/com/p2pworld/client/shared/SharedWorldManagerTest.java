@@ -1,7 +1,11 @@
 package com.p2pworld.client.shared;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -62,5 +66,75 @@ class SharedWorldManagerTest {
             assertFalse(WINDOWS_RESERVED_DEVICE.matcher(sanitized).matches(),
                     "Sanitized result must not be a raw Windows reserved device name: " + sanitized);
         }
+    }
+
+    @Test
+    void localPullFailsAndSkipsPruningOnSha256Mismatch(@TempDir Path tempDir) throws Exception {
+        Path syncRoot = tempDir.resolve("sync");
+        Path sharedWorldDir = syncRoot.resolve("TestWorld");
+        Path filesDir = sharedWorldDir.resolve("files");
+        Files.createDirectories(filesDir);
+
+        Files.writeString(filesDir.resolve("level.dat"), "corrupted-content", StandardCharsets.UTF_8);
+        String manifestJson = """
+                {
+                  "revision": 2,
+                  "lastHost": "Alice",
+                  "updatedAtMs": 1700000000000,
+                  "files": {
+                    "level.dat": {
+                      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                      "size": 17
+                    }
+                  }
+                }
+                """;
+        Files.writeString(sharedWorldDir.resolve("manifest.json"), manifestJson, StandardCharsets.UTF_8);
+
+        Path targetWorldDir = tempDir.resolve("saves").resolve("TestWorld");
+        Files.createDirectories(targetWorldDir);
+        Path preExistingExtra = targetWorldDir.resolve("keep_me.dat");
+        Files.writeString(preExistingExtra, "do-not-prune", StandardCharsets.UTF_8);
+
+        SharedWorldManager.SyncOpResult result = SharedWorldManager.getInstance()
+                .pullIncrementalFromLocalFolder(syncRoot.toString(), "TestWorld", targetWorldDir);
+
+        assertFalse(result.success(), "Pull must fail when copied file SHA-256 does not match manifest");
+        assertTrue(result.message().contains("SHA-256"), "Error message should mention SHA-256: " + result.message());
+        assertTrue(Files.exists(preExistingExtra), "Incomplete pull must not prune existing local files");
+    }
+
+    @Test
+    void localPullFailsAndSkipsPruningOnMissingFile(@TempDir Path tempDir) throws Exception {
+        Path syncRoot = tempDir.resolve("sync");
+        Path sharedWorldDir = syncRoot.resolve("MissingWorld");
+        Files.createDirectories(sharedWorldDir.resolve("files"));
+
+        String manifestJson = """
+                {
+                  "revision": 3,
+                  "lastHost": "Bob",
+                  "updatedAtMs": 1700000000000,
+                  "files": {
+                    "region/r.0.0.mca": {
+                      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "size": 100
+                    }
+                  }
+                }
+                """;
+        Files.writeString(sharedWorldDir.resolve("manifest.json"), manifestJson, StandardCharsets.UTF_8);
+
+        Path targetWorldDir = tempDir.resolve("saves").resolve("MissingWorld");
+        Files.createDirectories(targetWorldDir);
+        Path preExistingExtra = targetWorldDir.resolve("keep_me.dat");
+        Files.writeString(preExistingExtra, "do-not-prune", StandardCharsets.UTF_8);
+
+        SharedWorldManager.SyncOpResult result = SharedWorldManager.getInstance()
+                .pullIncrementalFromLocalFolder(syncRoot.toString(), "MissingWorld", targetWorldDir);
+
+        assertFalse(result.success(), "Pull must fail when a manifest file is missing from sync folder");
+        assertTrue(result.message().contains("missing"), "Error message should mention missing files: " + result.message());
+        assertTrue(Files.exists(preExistingExtra), "Incomplete pull must not prune existing local files");
     }
 }

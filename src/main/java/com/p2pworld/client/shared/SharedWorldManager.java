@@ -65,6 +65,7 @@ public class SharedWorldManager {
     private final AtomicLong heartbeatSessionSeq = new AtomicLong(0);
 
     private volatile String activeHostedWorldName = null;
+    private volatile boolean activeHostedUseDrive = false;
     private volatile Path activeHostedLocalDir = null;
     private volatile String activeRoomCode = null;
     private volatile String activeModeName = null;
@@ -531,7 +532,12 @@ public class SharedWorldManager {
                 }
             }
             if (drive.downloadFileById(mf.driveFileId, dest)) {
-                downloaded++;
+                if (mf.sha256 != null && !mf.sha256.isBlank() && !mf.sha256.equals(sha256(dest))) {
+                    failed++;
+                    FabricP2PMod.LOGGER.warn("[SharedWorlds] SHA-256 mismatch after downloading '{}' (id={})", rel, mf.driveFileId);
+                } else {
+                    downloaded++;
+                }
             } else {
                 failed++;
                 FabricP2PMod.LOGGER.warn("[SharedWorlds] Failed to download '{}' (id={})", rel, mf.driveFileId);
@@ -626,7 +632,7 @@ public class SharedWorldManager {
             }
 
             cfg.setLastSharedWorldName(worldName);
-            if (!preserveLockIfActive) {
+            if (!preserveLockIfActive && !isExitingHost) {
                 writeSessionLock(sharedDir, false, hostName, "", "", worldName);
             }
 
@@ -638,7 +644,7 @@ public class SharedWorldManager {
         }
     }
 
-    private SyncOpResult pullIncrementalFromLocalFolder(String syncFolder, String worldName, Path targetWorldDir) throws IOException {
+    SyncOpResult pullIncrementalFromLocalFolder(String syncFolder, String worldName, Path targetWorldDir) throws IOException {
         Path syncRoot = Path.of(syncFolder).toAbsolutePath().normalize();
         Path sharedDir = syncRoot.resolve(worldName).normalize();
         if (!sharedDir.startsWith(syncRoot) || sharedDir.equals(syncRoot)) {
@@ -661,6 +667,7 @@ public class SharedWorldManager {
         int copied = 0;
         int skipped = 0;
         int missing = 0;
+        int failed = 0;
         Set<Path> expectedFiles = new HashSet<>();
 
         for (Map.Entry<String, ManifestFile> entry : manifest.files.entrySet()) {
@@ -688,11 +695,22 @@ public class SharedWorldManager {
                 }
             }
             copyFileAtomically(src, dest);
-            copied++;
+            if (mf.sha256 != null && !mf.sha256.isBlank() && !mf.sha256.equals(sha256(dest))) {
+                failed++;
+                FabricP2PMod.LOGGER.warn("[SharedWorlds] SHA-256 mismatch after copying '{}' from sync folder", rel);
+            } else {
+                copied++;
+            }
         }
 
-        if (missing > 0) {
-            return new SyncOpResult(false, "Incomplete pull: " + missing + " file(s) missing in sync folder.");
+        if (missing > 0 || failed > 0) {
+            if (failed > 0 && missing == 0) {
+                return new SyncOpResult(false, "Incomplete pull: " + failed + " file(s) failed SHA-256 verification.");
+            }
+            if (missing > 0 && failed == 0) {
+                return new SyncOpResult(false, "Incomplete pull: " + missing + " file(s) missing in sync folder.");
+            }
+            return new SyncOpResult(false, "Incomplete pull: " + missing + " missing, " + failed + " failed SHA-256 verification.");
         }
 
         pruneRemovedLocalFiles(normalizedRoot, expectedFiles);
@@ -764,6 +782,7 @@ public class SharedWorldManager {
             }
             stopHeartbeat();
             this.activeHostedWorldName = worldName;
+            this.activeHostedUseDrive = useDrive;
             this.activeHostedLocalDir = worldDir;
             this.activeRoomCode = roomCode;
             this.activeModeName = mode.name();
@@ -798,12 +817,15 @@ public class SharedWorldManager {
     public void onP2PHostStopped(Minecraft mc) {
         String worldName;
         Path worldDir;
+        boolean useDrive;
         ScheduledExecutorService stoppedHeartbeat;
         synchronized (heartbeatLock) {
             worldName = this.activeHostedWorldName;
             worldDir = this.activeHostedLocalDir;
+            useDrive = this.activeHostedUseDrive;
             this.activeHostedWorldName = null;
             this.activeHostedLocalDir = null;
+            this.activeHostedUseDrive = false;
             this.activeRoomCode = null;
             this.activeModeName = null;
             heartbeatSessionSeq.incrementAndGet();
@@ -811,8 +833,9 @@ public class SharedWorldManager {
         }
 
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
-        boolean useDrive = isUsingGoogleDrive();
-        if (worldName == null || !cfg.isEnabled() || (!useDrive && !cfg.hasValidSyncFolder())) {
+        if (worldName == null || !cfg.isEnabled()
+                || (useDrive && !cfg.isGoogleSignedIn())
+                || (!useDrive && !cfg.hasValidSyncFolder())) {
             return;
         }
 

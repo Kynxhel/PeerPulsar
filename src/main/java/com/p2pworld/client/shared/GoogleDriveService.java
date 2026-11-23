@@ -153,8 +153,11 @@ public class GoogleDriveService {
                 .GET()
                 .build();
         HttpResponse<String> resp = sendString(req);
-        if (resp.statusCode() != 200) {
+        if (resp.statusCode() == 404) {
             return null;
+        }
+        if (resp.statusCode() != 200) {
+            throw new IOException("Drive read failed (" + resp.statusCode() + "): " + truncate(resp.body()));
         }
         return resp.body();
     }

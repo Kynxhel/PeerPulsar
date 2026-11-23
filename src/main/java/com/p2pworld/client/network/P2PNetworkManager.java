@@ -336,7 +336,7 @@ public class P2PNetworkManager {
                 ActiveHostingMode candidateMode;
 
                 if (mode == ConnectionMode.LOCAL_LAN) {
-                    String localIp = UPnPService.getInstance().getLocalIp();
+                    String localIp = UPnPService.getInstance().refreshLocalIp();
                     candidateHost = localIp;
                     candidatePort = port;
                     candidateRoomCode = RoomCodeHelper.encodeRoomCode(localIp, port);

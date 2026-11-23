@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.1.5+26.3
+- **Google Drive & Shared Worlds Reliability:** Hardened `GoogleDriveService.readTextFile` to throw on non-404 HTTP errors (preventing transient 429/5xx failures from bypassing live host locks or resetting manifest revisions), tracked the active hosting backend (`activeHostedUseDrive`) across stop/exit sync, added post-transfer SHA-256 verification on both Google Drive and local folder pulls, and removed duplicate exit lock writes.
+- **Networking Hardening:** Added `hostGeneration` guards to `UdpHolePunchService` signaling and receive loops to prevent zombie signal threads on rapid host restart, synchronized `TunnelRelayService` control-loop teardown and capped concurrent proxy streams at 64, and refreshed LAN/VPN IP addresses via `UPnPService.refreshLocalIp()` when starting Local LAN mode.
+- **OIDC, Mixin & Release Workflow Improvements:** Blocked `ServerboundSetCreativeModeSlotPacket` while a bound player is pending OIDC verification, required a configured OAuth Client ID during `GoogleAuthService.verifyIdTokenWithGoogle`, added JUnit 5 regression tests, and made `.github/workflows/release.yml` update existing releases in place without resetting download counts.
+
 ## v2.1.4+26.3
 - **UDP Hole Punching & Tunnel Relay Lifecycle Hardening:** Added generation-based cancellation guards to `UdpHolePunchService` (`startHostAsync` / `startClientProxyAsync`) and `TunnelRelayService` (`startTunnelAsync`) to prevent zombie sockets/threads on concurrent stop, and guaranteed `signalConn.disconnect()` on signaling publish errors.
 - **Shared Cloud Worlds & Google Drive Reliability:** Prevented zombie session-lock heartbeats on rapid host start/stop, blocked manual uploads from overwriting a live hosted world (`session.lock.json` freshness check), skipped vanished transient files (`NoSuchFileException`) during live singleplayer uploads, deferred local save folder creation until pull validation succeeds, and ordered Drive file queries by `modifiedTime desc`.

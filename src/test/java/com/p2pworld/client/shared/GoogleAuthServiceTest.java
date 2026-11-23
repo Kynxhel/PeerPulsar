@@ -72,4 +72,22 @@ class GoogleAuthServiceTest {
         // Invalid Base64URL payload
         assertFalse(GoogleAuthService.isJwtUnexpired("header.%%%invalid-base64%%%.signature", 0L));
     }
+
+    @Test
+    void verifyIdTokenRejectsNullBlankAndOversizedTokens() {
+        assertNull(GoogleAuthService.verifyIdTokenWithGoogle(null));
+        assertNull(GoogleAuthService.verifyIdTokenWithGoogle(""));
+        assertNull(GoogleAuthService.verifyIdTokenWithGoogle("   "));
+        assertNull(GoogleAuthService.verifyIdTokenWithGoogle("a".repeat(8193)));
+    }
+
+    @Test
+    void verifyIdTokenRejectsWhenNoClientIdConfigured() {
+        long futureExpSec = (System.currentTimeMillis() / 1000L) + 120L;
+        String jwt = buildJwt("{\"sub\":\"123\",\"exp\":" + futureExpSec + "}");
+
+        assertNull(GoogleAuthService.verifyIdTokenWithGoogle(jwt, null));
+        assertNull(GoogleAuthService.verifyIdTokenWithGoogle(jwt, ""));
+        assertNull(GoogleAuthService.verifyIdTokenWithGoogle(jwt, "   "));
+    }
 }
