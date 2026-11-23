@@ -28,6 +28,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -284,9 +285,15 @@ public class GoogleAuthService {
 
                     FabricP2PMod.LOGGER.info("[GoogleAuth] Signed in successfully as {}", email);
                     return new AuthResult(true, email, null);
+                } catch (TimeoutException e) {
+                    FabricP2PMod.LOGGER.warn("[GoogleAuth] Sign-in timed out waiting for browser callback.");
+                    return new AuthResult(false, null, "Sign-in timed out after 120s. Please try again.");
                 } catch (Exception e) {
-                    FabricP2PMod.LOGGER.error("[GoogleAuth] Sign-in failed: {}", e.getMessage());
-                    return new AuthResult(false, null, e.getMessage());
+                    String msg = (e.getMessage() != null && !e.getMessage().isBlank())
+                            ? e.getMessage()
+                            : e.getClass().getSimpleName();
+                    FabricP2PMod.LOGGER.error("[GoogleAuth] Sign-in failed: {}", msg);
+                    return new AuthResult(false, null, msg);
                 } finally {
                     this.signingIn.set(false);
                     if (server != null) {
@@ -341,6 +348,27 @@ public class GoogleAuthService {
             }
             if (!cfg.getGoogleAccessToken().isBlank() && System.currentTimeMillis() < cfg.getGoogleTokenExpiryMs()) {
                 return cfg.getGoogleAccessToken();
+            }
+            refreshTokensLocked(cfg);
+            return cfg.getGoogleAccessToken();
+        }
+    }
+
+    /**
+     * Forces an access token refresh (used when Drive returns HTTP 401 before local expiry),
+     * coalescing concurrent callers if another thread already refreshed past {@code failedToken}.
+     */
+    public String forceRefreshAccessToken(String failedToken) throws IOException {
+        synchronized (tokenRefreshLock) {
+            SharedWorldConfig cfg = SharedWorldConfig.getInstance();
+            if (!cfg.isGoogleSignedIn()) {
+                throw new IOException("Not signed in with Google");
+            }
+            String current = cfg.getGoogleAccessToken();
+            if (!current.isBlank()
+                    && !current.equals(failedToken)
+                    && System.currentTimeMillis() < cfg.getGoogleTokenExpiryMs()) {
+                return current;
             }
             refreshTokensLocked(cfg);
             return cfg.getGoogleAccessToken();

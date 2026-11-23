@@ -109,7 +109,7 @@ public class SharedWorldManager {
         if (server == null) return false;
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
         if (!cfg.isEnabled()) return false;
-        String worldName = sanitizeName(server.getWorldPath(LevelResource.ROOT).normalize().getFileName().toString());
+        String worldName = sanitizeName(server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize().getFileName().toString());
         if (worldName.isEmpty()) return false;
         if (worldName.equals(activeHostedWorldName)) return true;
         if (worldName.equals(cfg.getLastSharedWorldName())) return true;
@@ -164,7 +164,7 @@ public class SharedWorldManager {
                 for (GoogleDriveService.DriveItem folder : drive.listSubfolders(rootId)) {
                     String safeName = sanitizeName(folder.name());
                     if (!safeName.isEmpty()) {
-                        worldFolders.put(safeName, folder.id());
+                        worldFolders.putIfAbsent(safeName, folder.id());
                     }
                 }
                 for (Map.Entry<String, String> linked : cfg.getLinkedDriveWorlds().entrySet()) {
@@ -283,7 +283,7 @@ public class SharedWorldManager {
             return CompletableFuture.completedFuture(new SyncOpResult(false, "Singleplayer server is stopping or already stopped."));
         }
 
-        Path worldDir = server.getWorldPath(LevelResource.ROOT).normalize();
+        Path worldDir = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
         String worldName = sanitizeName(worldDir.getFileName().toString());
         if (worldName.isEmpty()) {
             return CompletableFuture.completedFuture(new SyncOpResult(false, "Invalid world name."));
@@ -331,12 +331,12 @@ public class SharedWorldManager {
                     if (useDrive) {
                         return uploadIncrementalToGoogleDrive(worldDir, worldName, hostName, false);
                     }
-                    return uploadIncrementalToLocalFolder(worldDir, worldName, hostName, true, false, null);
+                    return uploadIncrementalToLocalFolder(worldDir, worldName, hostName, false, null);
                 } finally {
                     releaseSync.run();
                 }
             }
-        }).exceptionally(err -> {
+        }, P2PNetworkManager.NETWORK_IO_EXECUTOR).exceptionally(err -> {
             releaseSync.run();
             return new SyncOpResult(false, "Save failed before sync: " + errorMessage(err));
         });
@@ -403,7 +403,7 @@ public class SharedWorldManager {
                     releaseSync.run();
                 }
             }
-        }).exceptionally(err -> {
+        }, P2PNetworkManager.NETWORK_IO_EXECUTOR).exceptionally(err -> {
             releaseSync.run();
             return new SyncOpResult(false, "Pull failed: " + errorMessage(err));
         });
@@ -438,6 +438,9 @@ public class SharedWorldManager {
 
             String oldManifestJson = drive.readTextFile(worldFolderId, MANIFEST_FILE);
             WorldManifest oldManifest = parseJson(oldManifestJson, WorldManifest.class);
+            if (oldManifest == null && oldManifestJson != null && !oldManifestJson.isBlank()) {
+                return new SyncOpResult(false, "Could not read existing Drive manifest.json; aborting to prevent revision reset.");
+            }
             if (oldManifest == null) oldManifest = new WorldManifest();
             if (oldManifest.files == null) oldManifest.files = new LinkedHashMap<>();
 
@@ -598,7 +601,7 @@ public class SharedWorldManager {
 
     // ==================== INCREMENTAL LOCAL FOLDER SYNC ====================
 
-    private SyncOpResult uploadIncrementalToLocalFolder(Path worldDir, String worldName, String hostName, boolean preserveLockIfActive, boolean isExitingHost, Path overrideSyncRoot) {
+    private SyncOpResult uploadIncrementalToLocalFolder(Path worldDir, String worldName, String hostName, boolean isExitingHost, Path overrideSyncRoot) {
         SharedWorldConfig cfg = SharedWorldConfig.getInstance();
         try {
             Path syncRoot = (overrideSyncRoot != null)
@@ -680,9 +683,6 @@ public class SharedWorldManager {
             }
 
             cfg.setLastSharedWorldName(worldName);
-            if (!preserveLockIfActive && !isExitingHost) {
-                writeSessionLock(sharedDir, false, hostName, "", "", worldName, null);
-            }
 
             FabricP2PMod.LOGGER.info("[SharedWorlds] Local incremental sync '{}' Rev #{}: {} changed, {} skipped.",
                     worldName, newManifest.revision, copied, skipped);
@@ -808,7 +808,7 @@ public class SharedWorldManager {
         }
 
         IntegratedServer server = mc.getSingleplayerServer();
-        Path worldDir = server.getWorldPath(LevelResource.ROOT).normalize();
+        Path worldDir = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
         String worldName = sanitizeName(worldDir.getFileName().toString());
         if (worldName.isEmpty()) {
             return;
@@ -923,10 +923,6 @@ public class SharedWorldManager {
         }
     }
 
-    public void onP2PHostStopped(Minecraft mc) {
-        onP2PHostStopped(mc, false);
-    }
-
     public void onP2PHostStopped(Minecraft mc, boolean worldDisconnecting) {
         String worldName;
         Path worldDir;
@@ -1027,7 +1023,7 @@ public class SharedWorldManager {
                             if (useDrive) {
                                 uploadIncrementalToGoogleDrive(worldDir, worldName, hostName, true);
                             } else {
-                                uploadIncrementalToLocalFolder(worldDir, worldName, hostName, false, true, syncRoot);
+                                uploadIncrementalToLocalFolder(worldDir, worldName, hostName, true, syncRoot);
                             }
                         } finally {
                             activeSyncOps.decrementAndGet();
@@ -1039,6 +1035,7 @@ public class SharedWorldManager {
             } finally {
                 if (exitLockRenewer != null) {
                     exitLockRenewer.shutdownNow();
+                    awaitHeartbeatTermination(exitLockRenewer);
                 }
                 awaitHeartbeatTermination(stoppedHeartbeat);
                 if (heartbeatSessionSeq.get() == stoppedSeq) {

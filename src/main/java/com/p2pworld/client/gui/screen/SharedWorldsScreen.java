@@ -296,11 +296,19 @@ public class SharedWorldsScreen extends Screen {
         return trimmed + "...";
     }
 
+    private boolean isUsingLocalSyncFolder() {
+        return !config.getSyncFolderPath().isBlank();
+    }
+
+    private boolean isBackendConfiguredAndReady() {
+        return isUsingLocalSyncFolder() ? config.hasValidSyncFolder() : config.isGoogleSignedIn();
+    }
+
     /**
      * Fetches shared worlds asynchronously so Google Drive API calls never stall Minecraft's render thread.
      */
     private void refreshWorldsListAsync(boolean showToastOnDone) {
-        if (!config.isEnabled() || (!config.hasValidSyncFolder() && !config.isGoogleSignedIn())) {
+        if (!config.isEnabled() || !isBackendConfiguredAndReady()) {
             this.worlds = new ArrayList<>();
             this.selectedWorldIndex = 0;
             this.loadingWorlds = false;
@@ -312,7 +320,7 @@ public class SharedWorldsScreen extends Screen {
         this.loadingWorlds = true;
         updateWidgetStates();
 
-        CompletableFuture.supplyAsync(manager::listSharedWorlds).whenComplete((result, err) -> {
+        CompletableFuture.supplyAsync(manager::listSharedWorlds, P2PNetworkManager.NETWORK_IO_EXECUTOR).whenComplete((result, err) -> {
             if (this.minecraft == null) return;
             this.minecraft.execute(() -> {
                 if (!this.screenActive || refreshGeneration.get() != gen) return;
@@ -438,25 +446,31 @@ public class SharedWorldsScreen extends Screen {
             showToast(tr("screen.fabricp2p.shared.toast_signed_out"), NeonTheme.SLATE);
             return;
         }
+        if (this.busy) return;
         this.busy = true;
         showToast(tr("screen.fabricp2p.shared.toast_google_opening"), NeonTheme.CYAN);
-        auth.signInAsync().whenComplete((res, err) -> {
-            if (this.minecraft == null) return;
-            this.minecraft.execute(() -> {
-                this.busy = false;
-                if (!this.screenActive) return;
-                refreshWorldsListAsync(false);
-                updateWidgetStates();
-                if (err != null) {
-                    showToast(tr("screen.fabricp2p.shared.toast_google_fail", extractErrorMessage(err)), NeonTheme.CRIMSON);
-                } else if (res != null && res.success()) {
-                    showToast(tr("screen.fabricp2p.shared.toast_google_ok", res.email()), NeonTheme.EMERALD);
-                } else {
-                    String reason = (res != null && res.error() != null) ? res.error() : "unknown error";
-                    showToast(tr("screen.fabricp2p.shared.toast_google_fail", reason), NeonTheme.CRIMSON);
-                }
+        try {
+            auth.signInAsync().whenComplete((res, err) -> {
+                if (this.minecraft == null) return;
+                this.minecraft.execute(() -> {
+                    this.busy = false;
+                    if (!this.screenActive) return;
+                    refreshWorldsListAsync(false);
+                    updateWidgetStates();
+                    if (err != null) {
+                        showToast(tr("screen.fabricp2p.shared.toast_google_fail", extractErrorMessage(err)), NeonTheme.CRIMSON);
+                    } else if (res != null && res.success()) {
+                        showToast(tr("screen.fabricp2p.shared.toast_google_ok", res.email()), NeonTheme.EMERALD);
+                    } else {
+                        String reason = (res != null && res.error() != null) ? res.error() : "unknown error";
+                        showToast(tr("screen.fabricp2p.shared.toast_google_fail", reason), NeonTheme.CRIMSON);
+                    }
+                });
             });
-        });
+        } catch (RuntimeException e) {
+            this.busy = false;
+            showToast(tr("screen.fabricp2p.shared.toast_google_fail", extractErrorMessage(e)), NeonTheme.CRIMSON);
+        }
         updateWidgetStates();
     }
 
@@ -487,7 +501,7 @@ public class SharedWorldsScreen extends Screen {
     private void updateWidgetStates() {
         boolean enabled = config.isEnabled();
         boolean signedIn = config.isGoogleSignedIn();
-        boolean backendReady = enabled && (config.hasValidSyncFolder() || signedIn);
+        boolean backendReady = enabled && isBackendConfiguredAndReady();
         boolean inSingleplayer = this.minecraft != null && this.minecraft.getSingleplayerServer() != null;
         boolean bgWorking = manager.isSyncing() || GoogleAuthService.getInstance().isSigningIn();
         this.lastSyncedWorking = bgWorking;
@@ -592,7 +606,7 @@ public class SharedWorldsScreen extends Screen {
                 left, folderY - 10, NeonTheme.TEXT_SECONDARY, false);
 
         int inputW = panelW - 110;
-        boolean backendReady = config.hasValidSyncFolder() || config.isGoogleSignedIn();
+        boolean backendReady = isBackendConfiguredAndReady();
         graphics.fill(left, folderY, left + inputW, folderY + 22, NeonTheme.INPUT_BG);
         graphics.outline(left, folderY, inputW, 22,
                 NeonTheme.withAlpha(config.isEnabled() ? (backendReady ? NeonTheme.EMERALD : NeonTheme.AMBER) : NeonTheme.SLATE, 160));

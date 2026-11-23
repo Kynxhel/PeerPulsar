@@ -301,7 +301,13 @@ public class UPnPService {
                 if (!isMapped || mappedPort != port || mapAttemptGen.get() != attemptGen) {
                     return;
                 }
-                sendAddPortMapping(port, mappedLocalIp, "TCP", description, leaseSec);
+                if (!sendAddPortMapping(port, mappedLocalIp, "TCP", description, leaseSec)
+                        && this.controlUrl == null
+                        && mapAttemptGen.get() == attemptGen) {
+                    if (discoverRouter()) {
+                        sendAddPortMapping(port, mappedLocalIp, "TCP", description, leaseSec);
+                    }
+                }
             }
         }, intervalSec, intervalSec, TimeUnit.SECONDS);
     }
@@ -486,7 +492,9 @@ public class UPnPService {
                     String ip = matcher.group(1).trim();
                     if (!ip.isEmpty() && !ip.equals("0.0.0.0")) {
                         this.routerWanIp = ip;
-                        this.externalIp = ip;
+                        if (!NetworkDiagnosticsService.isCgnatOrPrivateIp(ip)) {
+                            this.externalIp = ip;
+                        }
                     }
                 }
             }

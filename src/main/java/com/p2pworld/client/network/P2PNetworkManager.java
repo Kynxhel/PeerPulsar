@@ -274,6 +274,7 @@ public class P2PNetworkManager {
         this.lastErrorMessage = null;
 
         CompletableFuture.runAsync(() -> {
+            final AtomicBoolean publishedOnServerThread = new AtomicBoolean(false);
             boolean didPublish = false;
             boolean didUpnp = false;
             boolean didUdp = false;
@@ -325,6 +326,9 @@ public class P2PNetworkManager {
                         }
                         server.setDefaultGameType(gameType);
                         boolean published = server.publishServer(MinecraftServer.MultiplayerScope.LAN, cheats, port);
+                        if (published) {
+                            publishedOnServerThread.set(true);
+                        }
                         publishFuture.complete(published);
                     } catch (Throwable t) {
                         publishFuture.completeExceptionally(t);
@@ -471,6 +475,9 @@ public class P2PNetworkManager {
                 };
                 final String finalRoomCode = candidateRoomCode;
                 client.execute(() -> {
+                    if (!isHostGenerationActive(gen)) {
+                        return;
+                    }
                     if (client.player != null) {
                         client.player.sendSystemMessage(Component.literal(
                                 "§b✦ [FabricP2P] " + modeTag + " §fWorld is live! Room Code: §b§l" + finalRoomCode));
@@ -482,7 +489,7 @@ public class P2PNetworkManager {
                 if (this.hostGeneration.get() == gen) {
                     this.lastErrorMessage = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
                 }
-                rollbackHostAttempt(client, server, gen, didPublish, didUpnp, didUdp, didTunnel, callback);
+                rollbackHostAttempt(client, server, gen, didPublish || publishedOnServerThread.get(), didUpnp, didUdp, didTunnel, callback);
             }
         }, NETWORK_IO_EXECUTOR);
     }

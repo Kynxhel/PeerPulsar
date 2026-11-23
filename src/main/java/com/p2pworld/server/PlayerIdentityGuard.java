@@ -52,9 +52,7 @@ public final class PlayerIdentityGuard {
             ResourceKey<Level> dimension,
             double x,
             double y,
-            double z,
-            float yRot,
-            float xRot
+            double z
     ) {}
 
     private static final AtomicLong JOIN_SEQ = new AtomicLong(0);
@@ -211,9 +209,7 @@ public final class PlayerIdentityGuard {
                 player.level().dimension(),
                 player.getX(),
                 player.getY(),
-                player.getZ(),
-                player.getYRot(),
-                player.getXRot()
+                player.getZ()
         ));
 
         // Wait up to 15 seconds for client to refresh/send & server to verify Google OIDC id_token
@@ -301,11 +297,19 @@ public final class PlayerIdentityGuard {
                     return true;
                 }
                 pendingVerification.remove(uuid);
-                FabricP2PMod.LOGGER.warn("[IdentityGuard] Blocked nickname spoof for '{}'!", username);
-                player.connection.disconnect(Component.literal(
-                        "§c[FabricP2P] Access Denied!\n§7Username '" + username
-                                + "' belongs to a different Google account."
-                ));
+                if (verified == null) {
+                    FabricP2PMod.LOGGER.warn("[IdentityGuard] Rejected unverified player '{}' (bound to Google account).", username);
+                    player.connection.disconnect(Component.literal(
+                            "§c[FabricP2P] Username '" + username
+                                    + "' is protected by Google Sign-In!\n§7Sign in with the owner's Google account in Shared Worlds."
+                    ));
+                } else {
+                    FabricP2PMod.LOGGER.warn("[IdentityGuard] Blocked nickname spoof for '{}'!", username);
+                    player.connection.disconnect(Component.literal(
+                            "§c[FabricP2P] Access Denied!\n§7Username '" + username
+                                    + "' belongs to a different Google account."
+                    ));
+                }
                 return false;
             }
             pendingVerification.remove(uuid);

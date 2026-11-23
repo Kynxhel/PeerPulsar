@@ -22,8 +22,10 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -75,7 +77,6 @@ public class UdpHolePunchService {
     private final AtomicLong hostGeneration = new AtomicLong(0);
     private volatile boolean hostActive = false;
     private volatile String hostRoomCode = null;
-    private volatile String hostTopic = null;
     private volatile String hostPublicIp = null;
     private volatile int hostPublicPort = -1;
     private volatile DatagramSocket hostUdpSocket = null;
@@ -133,6 +134,7 @@ public class UdpHolePunchService {
                 boundUdp.setReceiveBufferSize(512 * 1024);
                 boundUdp.setSendBufferSize(512 * 1024);
 
+                InetAddress stunAddr = resolveIpv4(STUN_HOST);
                 InetSocketAddress mapped = queryStunOnSocket(boundUdp, STUN_HOST, STUN_PORT);
                 if (mapped == null) {
                     boundUdp.close();
@@ -142,8 +144,8 @@ public class UdpHolePunchService {
                 String rawId = randomCode(12);
                 String roomCode = "UDP-" + rawId.substring(0, 4) + "-" + rawId.substring(4, 8) + "-" + rawId.substring(8, 12);
                 String topic = "fp2p-" + rawId.toLowerCase();
-                String publicIp = mapped.getAddress().getHostAddress();
-                int publicPort = mapped.getPort();
+                final String publicIp = mapped.getAddress().getHostAddress();
+                final int publicPort = mapped.getPort();
 
                 synchronized (hostLock) {
                     if (hostGeneration.get() != gen) {
@@ -155,7 +157,6 @@ public class UdpHolePunchService {
                     this.hostPublicIp = publicIp;
                     this.hostPublicPort = publicPort;
                     this.hostRoomCode = roomCode;
-                    this.hostTopic = topic;
                     this.hostActive = true;
                     handedOff = true;
 
@@ -171,11 +172,11 @@ public class UdpHolePunchService {
                         return t;
                     });
 
-                    // Keep CGNAT UDP port mapping alive
+                    // Keep CGNAT UDP port mapping alive using cached STUN IP (never block scheduler on DNS)
                     this.hostScheduler.scheduleAtFixedRate(() -> {
                         if (!hostActive) return;
                         try {
-                            sendStunKeepalive(boundUdp, STUN_HOST, STUN_PORT);
+                            sendStunKeepalive(boundUdp, stunAddr, STUN_PORT);
                         } catch (Exception ignored) {}
                     }, 12, 12, TimeUnit.SECONDS);
 
@@ -205,7 +206,7 @@ public class UdpHolePunchService {
                     recvThread.start();
 
                     // Signaling listener loop (ntfy.sh streaming NDJSON)
-                    Thread signalThread = new Thread(() -> runHostSignalLoop(gen, topic, boundUdp), "FabricP2P-UDP-Host-Signal");
+                    Thread signalThread = new Thread(() -> runHostSignalLoop(gen, topic, boundUdp, publicIp, publicPort), "FabricP2P-UDP-Host-Signal");
                     signalThread.setDaemon(true);
                     signalThread.start();
                 }
@@ -224,11 +225,13 @@ public class UdpHolePunchService {
         }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
     }
 
-    private void runHostSignalLoop(long gen, String topic, DatagramSocket udp) {
+    private void runHostSignalLoop(long gen, String topic, DatagramSocket udp, String myPublicIp, int myPublicPort) {
+        final Set<String> seenMessageIds = new HashSet<>();
+        long lastSinceEpoch = Math.max(0L, (System.currentTimeMillis() / 1000L) - 5L);
         while (hostActive && hostGeneration.get() == gen) {
             HttpURLConnection conn = null;
             try {
-                conn = (HttpURLConnection) URI.create(SIGNAL_BASE + topic + "/json").toURL().openConnection();
+                conn = (HttpURLConnection) URI.create(SIGNAL_BASE + topic + "/json?since=" + lastSinceEpoch).toURL().openConnection();
                 conn.setConnectTimeout(6000);
                 conn.setReadTimeout(90_000);
                 synchronized (hostLock) {
@@ -244,7 +247,20 @@ public class UdpHolePunchService {
                         if (line.isBlank()) continue;
                         try {
                             JsonObject env = JsonParser.parseString(line).getAsJsonObject();
+                            if (env.has("time") && env.get("time").isJsonPrimitive()) {
+                                lastSinceEpoch = Math.max(lastSinceEpoch, env.get("time").getAsLong());
+                            }
                             if (!"message".equals(env.has("event") ? env.get("event").getAsString() : "")) continue;
+                            if (env.has("id") && env.get("id").isJsonPrimitive()) {
+                                String msgId = env.get("id").getAsString();
+                                if (!seenMessageIds.add(msgId)) {
+                                    continue;
+                                }
+                                if (seenMessageIds.size() > 1024) {
+                                    seenMessageIds.clear();
+                                    seenMessageIds.add(msgId);
+                                }
+                            }
                             if (!env.has("message") || env.get("message").isJsonNull()) continue;
                             String msgStr = env.get("message").getAsString();
                             JsonObject payload = JsonParser.parseString(msgStr).getAsJsonObject();
@@ -265,12 +281,12 @@ public class UdpHolePunchService {
                                 break;
                             }
 
-                            // Build reply safely with JsonObject
+                            // Build reply safely with JsonObject using immutable session endpoint snapshot
                             JsonObject replyObj = new JsonObject();
                             replyObj.addProperty("role", "host");
                             replyObj.addProperty("to", peerId);
-                            replyObj.addProperty("ip", hostPublicIp);
-                            replyObj.addProperty("port", hostPublicPort);
+                            replyObj.addProperty("ip", myPublicIp);
+                            replyObj.addProperty("port", myPublicPort);
                             replyObj.addProperty("sid", sessionId);
                             publishSignal(topic, replyObj.toString());
 
@@ -332,11 +348,14 @@ public class UdpHolePunchService {
 
                 if (type == TYPE_PUNCH) {
                     PeerSession session = getOrCreateHostSession(gen, sessionId, udp, remoteAddr, localMcPort);
-                    if (session != null) {
+                    if (session != null && session.acceptsRemoteAddress(remoteAddr)) {
                         sendPacket(udp, remoteAddr, TYPE_PUNCH_ACK, sessionId, 0, null, 0);
                     }
                 } else if (type == TYPE_PUNCH_ACK) {
-                    getOrCreateHostSession(gen, sessionId, udp, remoteAddr, localMcPort);
+                    PeerSession session = getOrCreateHostSession(gen, sessionId, udp, remoteAddr, localMcPort);
+                    if (session != null) {
+                        session.acceptsRemoteAddress(remoteAddr);
+                    }
                 } else {
                     PeerSession session = hostSessions.get(sessionId);
                     if (session == null && type == TYPE_DATA && seq == 0) {
@@ -427,7 +446,6 @@ public class UdpHolePunchService {
         synchronized (hostLock) {
             this.hostActive = false;
             this.hostRoomCode = null;
-            this.hostTopic = null;
             this.hostPublicIp = null;
             this.hostPublicPort = -1;
 
@@ -1231,27 +1249,30 @@ public class UdpHolePunchService {
         return null;
     }
 
-    private static void sendStunKeepalive(DatagramSocket socket, String host, int port) throws IOException {
+    private static void sendStunKeepalive(DatagramSocket socket, InetAddress stunAddr, int port) throws IOException {
         ByteBuffer req = ByteBuffer.allocate(20);
         req.putShort((short) 0x0001);
         req.putShort((short) 0x0000);
         req.putInt(0x2112A442);
         for (int i = 0; i < 3; i++) req.putInt(ThreadLocalRandom.current().nextInt());
         byte[] tx = req.array();
-        socket.send(new DatagramPacket(tx, tx.length, resolveIpv4(host), port));
+        socket.send(new DatagramPacket(tx, tx.length, stunAddr, port));
     }
 
     private static void publishSignal(String topic, String body) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) URI.create(SIGNAL_BASE + topic).toURL().openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setConnectTimeout(4000);
-        conn.setReadTimeout(4000);
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(body.getBytes(StandardCharsets.UTF_8));
+        try {
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(4000);
+            conn.setReadTimeout(4000);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body.getBytes(StandardCharsets.UTF_8));
+            }
+            conn.getResponseCode();
+        } finally {
+            conn.disconnect();
         }
-        conn.getResponseCode();
-        conn.disconnect();
     }
 
     private static String randomCode(int len) {

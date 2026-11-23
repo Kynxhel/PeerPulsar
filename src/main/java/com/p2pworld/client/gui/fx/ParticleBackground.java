@@ -42,9 +42,8 @@ public class ParticleBackground {
                 float vx = (random.nextFloat() - 0.5f) * 26.0f;
                 float vy = (random.nextFloat() - 0.5f) * 26.0f;
                 int color = NODE_PALETTE[random.nextInt(NODE_PALETTE.length)];
-                float radius = 1.2f + random.nextFloat() * 1.4f;
                 float phase = random.nextFloat() * 6.283f;
-                nodes.add(new MeshNode(x, y, vx, vy, color, radius, phase));
+                nodes.add(new MeshNode(x, y, vx, vy, color, phase));
             }
             lastWidth = width;
             lastHeight = height;
@@ -168,12 +167,6 @@ public class ParticleBackground {
         renderSparks(graphics, dt);
     }
 
-    public void renderSparksOnly(GuiGraphicsExtractor graphics) {
-        long now = System.nanoTime();
-        float dt = Math.min(0.05f, (now - lastUpdateNanos) / 1_000_000_000.0f);
-        renderSparks(graphics, dt);
-    }
-
     private void renderSparks(GuiGraphicsExtractor graphics, float dt) {
         Iterator<Spark> it = sparks.iterator();
         while (it.hasNext()) {
@@ -218,16 +211,14 @@ public class ParticleBackground {
     private static class MeshNode {
         float x, y, vx, vy;
         final int color;
-        final float radius;
         final float phase;
 
-        MeshNode(float x, float y, float vx, float vy, int color, float radius, float phase) {
+        MeshNode(float x, float y, float vx, float vy, int color, float phase) {
             this.x = x;
             this.y = y;
             this.vx = vx;
             this.vy = vy;
             this.color = color;
-            this.radius = radius;
             this.phase = phase;
         }
     }

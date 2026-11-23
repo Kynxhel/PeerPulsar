@@ -195,9 +195,30 @@ class RoomCodeHelperTest {
     void decodesRealBase64CodeEvenAfterDecoyPrefixInMessage() {
         String realCode = RoomCodeHelper.encodeRoomCode("bore.pub", 41234);
         String msg = "Join my P2P-server at " + realCode + "!";
+        assertEquals(realCode, RoomCodeHelper.extractCleanCode(msg));
         RoomCodeHelper.ConnectionTarget target = RoomCodeHelper.decodeRoomCode(msg);
         assertNotNull(target);
         assertEquals("bore.pub", target.host());
         assertEquals(41234, target.port());
+    }
+
+    @Test
+    void extractCleanCodeSkipsInvalidHexDecoy() {
+        String realCode = RoomCodeHelper.encodeRoomCode("85.102.50.21", 25565);
+        String msg = "Not P2P-5A5A-5A5A-5A5A, real code is " + realCode;
+        assertEquals(realCode, RoomCodeHelper.extractCleanCode(msg));
+    }
+
+    @Test
+    void udpDiscordInviteDoesNotLeakRawTcpAddress() {
+        String udpCode = "UDP-ABCD-1234-EFGH";
+        String invite = RoomCodeHelper.generateDiscordInvite(udpCode, "85.102.50.21", 51234, true, "survival");
+        assertTrue(invite.contains(udpCode));
+        assertFalse(invite.contains("85.102.50.21"));
+        assertFalse(invite.contains("Direct Address"));
+        RoomCodeHelper.ConnectionTarget decoded = RoomCodeHelper.decodeRoomCode(invite);
+        assertNotNull(decoded);
+        assertTrue(decoded.isUdpHolePunch());
+        assertEquals(udpCode, decoded.host());
     }
 }

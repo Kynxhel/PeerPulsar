@@ -16,8 +16,8 @@ public abstract class IntegratedServerMixin {
      * hosting is starting/active, and explicitly restores Mojang Online Auth for Vanilla "Open to LAN"
      * so stopping Offline P2P can never leave Vanilla LAN stuck in offline mode.
      */
-    @Inject(method = "publishServer(Lnet/minecraft/server/MinecraftServer$MultiplayerScope;ZI)Z", at = @At("HEAD"))
-    private void onPublishServerHead(MinecraftServer.MultiplayerScope scope, boolean cheatsAllowed, int port, CallbackInfoReturnable<Boolean> cir) {
+    @Inject(method = "publishServer(Lnet/minecraft/server/MinecraftServer$MultiplayerScope;I)Z", at = @At("HEAD"))
+    private void onPublishServerHead(MinecraftServer.MultiplayerScope scope, int port, CallbackInfoReturnable<Boolean> cir) {
         P2PNetworkManager manager = P2PNetworkManager.getInstance();
         if (!manager.isStarting() && !manager.isP2PActive()) {
             ((MinecraftServer) (Object) this).setUsesAuthentication(true);
@@ -28,8 +28,8 @@ public abstract class IntegratedServerMixin {
         FabricP2PMod.LOGGER.info("[P2P-Auth 26.3] Setting usesAuthentication = {} for IntegratedServer (Port: {}).", useAuth, port);
     }
 
-    @Inject(method = "publishServer(Lnet/minecraft/server/MinecraftServer$MultiplayerScope;ZI)Z", at = @At("RETURN"))
-    private void onPublishServerReturn(MinecraftServer.MultiplayerScope scope, boolean cheatsAllowed, int port, CallbackInfoReturnable<Boolean> cir) {
+    @Inject(method = "publishServer(Lnet/minecraft/server/MinecraftServer$MultiplayerScope;I)Z", at = @At("RETURN"))
+    private void onPublishServerReturn(MinecraftServer.MultiplayerScope scope, int port, CallbackInfoReturnable<Boolean> cir) {
         P2PNetworkManager manager = P2PNetworkManager.getInstance();
         if (!manager.isStarting() && !manager.isP2PActive()) {
             return;

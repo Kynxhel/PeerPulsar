@@ -36,12 +36,9 @@ public class TunnelRelayService {
     private volatile boolean active = false;
     private volatile String remoteHost = RELAY_HOST;
     private volatile int remotePort = -1;
-    private volatile int localTargetPort = -1;
     private volatile Socket controlSocket = null;
-    private volatile Thread controlThread = null;
     private volatile Consumer<String> unexpectedDisconnectHandler = null;
     private final Set<Socket> activeProxySockets = ConcurrentHashMap.newKeySet();
-    private final Set<Object> activeStreamTokens = ConcurrentHashMap.newKeySet();
 
     private TunnelRelayService() {}
 
@@ -66,10 +63,6 @@ public class TunnelRelayService {
 
     public int getRemotePort() {
         return remotePort;
-    }
-
-    public int getActiveStreamCount() {
-        return activeStreamTokens.size();
     }
 
     /**
@@ -127,16 +120,15 @@ public class TunnelRelayService {
                         closeQuietly(ctrl);
                         return new TunnelStartResult(false, null, -1, "Tunnel startup cancelled");
                     }
-                    this.localTargetPort = localPort;
                     this.controlSocket = committedCtrl;
                     this.remoteHost = RELAY_HOST;
                     this.remotePort = assignedPort;
                     this.active = true;
                     handedOff = true;
 
-                    this.controlThread = new Thread(() -> runControlLoop(committedCtrl, localPort), "FabricP2P-Tunnel-Control");
-                    this.controlThread.setDaemon(true);
-                    this.controlThread.start();
+                    Thread controlThread = new Thread(() -> runControlLoop(committedCtrl, localPort), "FabricP2P-Tunnel-Control");
+                    controlThread.setDaemon(true);
+                    controlThread.start();
                 }
 
                 FabricP2PMod.LOGGER.info("[P2P-Tunnel] Tunnel established! {}:{} -> 127.0.0.1:{}",
@@ -197,7 +189,6 @@ public class TunnelRelayService {
                     this.active = false;
                     this.controlSocket = null;
                     this.remotePort = -1;
-                    this.localTargetPort = -1;
                     for (Socket s : activeProxySockets) {
                         closeQuietly(s);
                     }
@@ -225,7 +216,6 @@ public class TunnelRelayService {
         Thread proxyThread = new Thread(() -> {
             Socket remoteSock = null;
             Socket localSock = null;
-            final Object streamToken = new Object();
             try {
                 if (!active || this.controlSocket != expectedCtrl) {
                     return;
@@ -254,12 +244,20 @@ public class TunnelRelayService {
                     return;
                 }
 
-                activeStreamTokens.add(streamToken);
-
                 final Socket rSock = remoteSock;
                 final Socket lSock = localSock;
 
-                Thread upstream = new Thread(() -> pipeBytes(lSock, rSock), "FabricP2P-Proxy-Up");
+                Thread upstream = new Thread(() -> {
+                    try {
+                        pipeBytes(lSock, rSock);
+                    } finally {
+                        try {
+                            if (!rSock.isClosed()) {
+                                rSock.setSoTimeout(3000);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }, "FabricP2P-Proxy-Up");
                 upstream.setDaemon(true);
                 upstream.start();
 
@@ -269,7 +267,6 @@ public class TunnelRelayService {
                 FabricP2PMod.LOGGER.debug("[P2P-Tunnel] Proxy stream ended ({}): {}", uuid, e.getMessage());
             } finally {
                 pendingOrActiveStreams.decrementAndGet();
-                activeStreamTokens.remove(streamToken);
                 closeQuietly(remoteSock);
                 closeQuietly(localSock);
                 if (remoteSock != null) activeProxySockets.remove(remoteSock);
@@ -321,7 +318,6 @@ public class TunnelRelayService {
         synchronized (this) {
             this.active = false;
             this.remotePort = -1;
-            this.localTargetPort = -1;
 
             Socket ctrl = this.controlSocket;
             this.controlSocket = null;

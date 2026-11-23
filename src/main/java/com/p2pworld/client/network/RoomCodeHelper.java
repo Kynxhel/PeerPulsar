@@ -5,6 +5,7 @@ import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -77,15 +78,21 @@ public class RoomCodeHelper {
         String trimmed = rawInput.trim();
         Matcher udpMatcher = EMBEDDED_UDP_CODE.matcher(trimmed);
         if (udpMatcher.find()) {
-            return udpMatcher.group(0).toUpperCase();
+            return udpMatcher.group(0).toUpperCase(Locale.ROOT);
         }
         Matcher hexMatcher = EMBEDDED_HEX_CODE.matcher(trimmed);
-        if (hexMatcher.find()) {
-            return hexMatcher.group(0).toUpperCase();
+        while (hexMatcher.find()) {
+            String candidate = hexMatcher.group(0).toUpperCase(Locale.ROOT);
+            if (decodeSingleToken(candidate) != null) {
+                return candidate;
+            }
         }
         Matcher b64Matcher = EMBEDDED_B64_CODE.matcher(trimmed);
-        if (b64Matcher.find()) {
-            return b64Matcher.group(0);
+        while (b64Matcher.find()) {
+            String candidate = b64Matcher.group(0);
+            if (decodeSingleToken(candidate) != null) {
+                return candidate;
+            }
         }
         return trimmed.replace("`", "").replace("\"", "").replace("'", "").trim();
     }
@@ -198,10 +205,14 @@ public class RoomCodeHelper {
     }
 
     public static String generateDiscordInvite(String roomCode, String hostIp, int port, boolean offlineMode, String gameMode) {
-        String safeMode = gameMode != null ? gameMode.toUpperCase() : "SURVIVAL";
+        String safeMode = gameMode != null ? gameMode.toUpperCase(Locale.ROOT) : "SURVIVAL";
+        boolean isUdp = roomCode != null && roomCode.toUpperCase(Locale.ROOT).startsWith(UDP_PREFIX);
+        String endpointLine = isUdp
+                ? "⚡ **Connection:** Direct UDP P2P (paste Room Code in 'Join P2P')\n"
+                : "🌐 **Direct Address:** `" + formatHostPort(hostIp, port) + "`\n";
         return "🎮 **Join my Minecraft 26.3 P2P World!**\n" +
                 "🔑 **Room Code:** `" + roomCode + "`\n" +
-                "🌐 **Direct Address:** `" + formatHostPort(hostIp, port) + "`\n" +
+                endpointLine +
                 "⚡ **Offline LAN Mode:** " + (offlineMode ? "Enabled" : "Disabled (Online Auth)") + "\n" +
                 "⚔️ **Game Mode:** " + safeMode + "\n" +
                 "👉 *Paste this invite into the 'Join P2P' screen in Fabric P2P World!*";

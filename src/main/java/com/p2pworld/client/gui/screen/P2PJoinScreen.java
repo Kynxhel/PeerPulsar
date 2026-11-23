@@ -52,6 +52,16 @@ public class P2PJoinScreen extends Screen {
         return Component.translatable(key, args).getString();
     }
 
+    private String truncatePlain(String text, int maxWidth) {
+        if (text == null || maxWidth <= 0) return "";
+        if (this.font.width(text) <= maxWidth) return text;
+        int ellW = this.font.width("...");
+        if (maxWidth <= ellW) {
+            return this.font.plainSubstrByWidth(text, maxWidth);
+        }
+        return this.font.plainSubstrByWidth(text, maxWidth - ellW) + "...";
+    }
+
     private int computeCardY() {
         return Math.max(46, Math.min(this.height - 172, this.height / 2 - 66));
     }
@@ -332,6 +342,8 @@ public class P2PJoinScreen extends Screen {
         // 3. Telemetry Status Box inside Portal Card (null-safe even if input cleared mid-operation)
         int teleY = cardY + 58;
         int teleH = 36;
+        int maxTeleW = Math.max(40, panelW - 32);
+        int maxPingW = Math.max(40, panelW - 58);
         graphics.fill(panelLeft + 12, teleY, panelLeft + panelW - 12, teleY + teleH, 0x99070B16);
         graphics.outline(panelLeft + 12, teleY, panelW - 24, teleH, NeonTheme.withAlpha(cardAccent, 75));
 
@@ -339,12 +351,12 @@ public class P2PJoinScreen extends Screen {
             String targetText = (activeOpTargetLabel != null && !activeOpTargetLabel.isBlank())
                     ? activeOpTargetLabel
                     : (currentTarget != null ? currentTarget.host() : "");
-            graphics.text(this.font, tr("screen.fabricp2p.join.punching_status", targetText),
+            graphics.text(this.font, truncatePlain(tr("screen.fabricp2p.join.punching_status", targetText), maxTeleW),
                     panelLeft + 20, teleY + 8, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
             NeonRenderUtils.drawScannerBar(graphics, panelLeft + 20, teleY + 24, panelW - 40, NeonTheme.CYAN, timeSec);
         } else if (isTesting) {
             String targetText = currentTarget != null ? RoomCodeHelper.formatHostPort(currentTarget.host(), currentTarget.port()) : activeOpTargetLabel;
-            graphics.text(this.font, tr("screen.fabricp2p.join.scanning", targetText),
+            graphics.text(this.font, truncatePlain(tr("screen.fabricp2p.join.scanning", targetText), maxTeleW),
                     panelLeft + 20, teleY + 8, NeonTheme.withAlpha(NeonTheme.AMBER, 255), true);
             NeonRenderUtils.drawScannerBar(graphics, panelLeft + 20, teleY + 24, panelW - 40, NeonTheme.AMBER, timeSec);
         } else if (lastPingResult != null) {
@@ -353,19 +365,18 @@ public class P2PJoinScreen extends Screen {
                 String players = lastPingResult.onlinePlayers() >= 0
                         ? (" • " + tr("screen.fabricp2p.join.players", lastPingResult.onlinePlayers(), lastPingResult.maxPlayers()))
                         : "";
-                graphics.text(this.font, tr("screen.fabricp2p.join.online_label", lastPingResult.latencyMs()) + players,
+                graphics.text(this.font, truncatePlain(tr("screen.fabricp2p.join.online_label", lastPingResult.latencyMs()) + players, maxPingW),
                         panelLeft + 46, teleY + 7, NeonTheme.withAlpha(NeonTheme.EMERALD, 255), true);
                 String fallbackAddr = currentTarget != null ? RoomCodeHelper.formatHostPort(currentTarget.host(), currentTarget.port()) : activeOpTargetLabel;
                 String sub = (lastPingResult.motd() != null && !lastPingResult.motd().isEmpty())
                         ? lastPingResult.motd()
                         : fallbackAddr;
-                if (sub.length() > 44) sub = sub.substring(0, 44) + "...";
-                graphics.text(this.font, sub, panelLeft + 46, teleY + 20, NeonTheme.TEXT_SECONDARY, false);
+                graphics.text(this.font, truncatePlain(sub, maxPingW), panelLeft + 46, teleY + 20, NeonTheme.TEXT_SECONDARY, false);
             } else {
                 NeonRenderUtils.drawSignalBars(graphics, panelLeft + 20, teleY + 12, -1);
-                graphics.text(this.font, tr("screen.fabricp2p.join.offline_title"),
+                graphics.text(this.font, truncatePlain(tr("screen.fabricp2p.join.offline_title"), maxPingW),
                         panelLeft + 46, teleY + 7, NeonTheme.withAlpha(NeonTheme.CRIMSON, 255), true);
-                graphics.text(this.font, tr("screen.fabricp2p.join.offline_hint"),
+                graphics.text(this.font, truncatePlain(tr("screen.fabricp2p.join.offline_hint"), maxPingW),
                         panelLeft + 46, teleY + 20, NeonTheme.TEXT_MUTED, false);
             }
         } else if (currentTarget != null) {
@@ -375,14 +386,14 @@ public class P2PJoinScreen extends Screen {
             String hintLabel = currentTarget.isUdpHolePunch()
                     ? tr("screen.fabricp2p.join.resolved_udp_hint")
                     : tr("screen.fabricp2p.join.resolved_hint");
-            graphics.text(this.font, targetLabel,
+            graphics.text(this.font, truncatePlain(targetLabel, maxTeleW),
                     panelLeft + 20, teleY + 8, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
-            graphics.text(this.font, hintLabel,
+            graphics.text(this.font, truncatePlain(hintLabel, maxTeleW),
                     panelLeft + 20, teleY + 21, NeonTheme.TEXT_SECONDARY, false);
         } else {
-            graphics.text(this.font, Component.translatable("screen.fabricp2p.join.status_idle"),
+            graphics.text(this.font, truncatePlain(tr("screen.fabricp2p.join.status_idle"), maxTeleW),
                     panelLeft + 20, teleY + 8, NeonTheme.TEXT_MUTED, false);
-            graphics.text(this.font, tr("screen.fabricp2p.join.tip_discord"),
+            graphics.text(this.font, truncatePlain(tr("screen.fabricp2p.join.tip_discord"), maxTeleW),
                     panelLeft + 20, teleY + 21, NeonTheme.withAlpha(NeonTheme.CYAN, 175), false);
         }
     }

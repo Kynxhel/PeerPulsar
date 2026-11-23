@@ -140,7 +140,7 @@ public class FabricP2PMod implements ModInitializer {
                                                 if (verified.email().equalsIgnoreCase(cfg.getGoogleUserEmail())) {
                                                     return;
                                                 }
-                                                String rawWorldName = server.getWorldPath(LevelResource.ROOT).normalize().getFileName().toString();
+                                                String rawWorldName = server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize().getFileName().toString();
                                                 String worldName = SharedWorldManager.sanitizeName(rawWorldName);
                                                 if (worldName.isEmpty()) return;
 
