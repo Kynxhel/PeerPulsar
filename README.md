@@ -1,47 +1,63 @@
-# 🌐 Fabric P2P World (Minecraft 26.3)
+# 🌐 Fabric P2P World
 
-An open-source, zero-server-cost **Peer-to-Peer World Hosting** mod for **Minecraft 26.3 (Fabric)** with a Neon Control Center UI, automatic NAT/CGNAT diagnostics, Essential-style **UDP Hole Punching**, automatic **TCP Tunnel Relay**, **Offline/Online (Crack + Premium)** compatibility, and optional **Shared Cloud Worlds** (Google Drive / OneDrive / Syncthing rotating host).
+[![Minecraft 26.3](https://img.shields.io/badge/Minecraft-26.3-10B981?style=for-the-badge)](https://www.minecraft.net/)
+[![Fabric Loader](https://img.shields.io/badge/Fabric-0.19.5+-00F0FF?style=for-the-badge)](https://fabricmc.net/)
+[![Java 21+](https://img.shields.io/badge/Java-21+-A855F7?style=for-the-badge)](https://adoptium.net/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge)](LICENSE)
 
----
-
-## ✨ Key Features
-
-- **4 Selectable Connection Modes** (with live Green/Red status dots & automatic `(Recommended)` fastest-mode selection):
-  - **Direct P2P (UPnP):** Automatic router port-forwarding (`0ms` overhead) for Open NAT networks.
-  - **UDP Hole Punch:** Essential-style direct UDP P2P (`0ms` relay overhead) using Dual-STUN + Reliable Ordered UDP — works right through **Cone CGNAT**!
-  - **Tunnel Relay (`bore.pub`):** Automatic TCP tunnel fallback that works behind **Symmetric NAT**, university/mobile networks, and strict firewalls.
-  - **Local LAN:** Instant same-network / VPN hosting.
-- **Automatic Network & CGNAT Diagnostics:**
-  - Tests public IP, UPnP port mapping, CGNAT (`100.64.0.0/10`), Cone vs. Symmetric NAT (Dual-STUN), and relay latency automatically.
-- **Offline & Online Account Support:**
-  - Toggleable `Offline LAN Auth` allows both original Microsoft/Mojang and offline accounts to play together seamlessly.
-- **Smart Room Codes & Discord Invites:**
-  - Share clean `P2P-XXXX-XXXX-XXXX` or `UDP-XXXX-XXXX-XXXX` room codes, or paste an entire Discord invite block into the Join screen (auto-extracted!).
-- **Toggleable Shared Cloud Worlds (`☁ Shared Worlds`):**
-  - Optional feature to sync a world via **Google Drive** (built-in Sign in with Google) or any local synced folder (Google Drive Desktop, OneDrive, Dropbox, Syncthing).
-  - Rotating Host Lockfile (`session.lock.json`): whoever launches first becomes Host; friends automatically see **`● LIVE`** and join with 1 click!
+**Fabric P2P World** is a lightweight, open-source **Peer-to-Peer World Hosting** mod for **Minecraft 26.3 (Fabric)**. Host your singleplayer worlds directly from the Pause Menu with zero paid servers, automatic NAT/CGNAT detection, **UDP Hole Punching**, automatic **TCP Tunnel Relay**, smart room codes, and optional **Shared Cloud Worlds**.
 
 ---
 
-## 🛠️ Requirements & Build
+## ✨ Features
 
-- **Minecraft:** `26.3`
-- **Fabric Loader:** `>= 0.19.5`
-- **Fabric API:** `0.165.2+26.3`
-- **Java:** `Java 21+`
+### 🚀 4 Smart Connection Modes (Auto-Tested & Ranked)
+When you open the **Start P2P** screen, the mod automatically tests your network (Public IP, UPnP port mapping, CGNAT, Cone vs. Symmetric NAT via Dual-STUN, and Relay latency) and shows a live right-side selector with **green/red status dots** and a **`(Recommended)`** tag on the fastest supported option:
+
+| Mode | Best For | Overhead | Works Behind CGNAT? |
+| :--- | :--- | :---: | :---: |
+| **Direct P2P (UPnP)** | Open NAT routers with UPnP enabled | `0 ms` | ❌ |
+| **UDP Punch** | Cone CGNAT networks (Direct UDP P2P) | `0 ms` | ✅ (Cone NAT) |
+| **Tunnel Relay** | Symmetric NAT, strict firewalls, mobile hotspots | Low (`bore.pub`) | ✅ (Always) |
+| **Local LAN** | Same Wi-Fi / local network / VPN | `<1 ms` | ✅ (LAN) |
+
+### 🎨 Modern Neon Control Center UI
+- **Pause Menu Integration:** Seamless `Start P2P` button right beside vanilla *Open to LAN*.
+- **Title & Multiplayer Screen Integration:** 1-click `Join P2P` and `Shared Worlds` buttons.
+- **Smart Clipboard & Discord Invites:** Generates clean `P2P-XXXX-XXXX-XXXX` / `UDP-XXXX-XXXX-XXXX` codes and rich Discord invites. Pasting an entire Discord invite into the Join screen auto-extracts the code!
+- **Live Server Ping & Signal Meter:** Check latency (ms), player count, and MOTD before joining.
+- **Configurable World Controls:** Toggle Game Mode, Cheats, Default/Random Port, and **Offline LAN Auth** mode for local/offline LAN sessions.
+
+### ☁️ Optional Shared Cloud Worlds (Toggleable)
+- **Disabled by default** — enable anytime from the `☁ Shared Worlds` screen.
+- Supports **Sign in with Google** (direct Google Drive API v3 sync to your own `FabricP2P_SharedWorlds` folder) OR any local synced folder (Google Drive Desktop, OneDrive, Dropbox, Syncthing).
+- **Rotating Host Lock (`session.lock.json`):** Whoever starts the world first becomes the Host; friends automatically see `● LIVE` and join with 1 click. When the Host exits, the updated world auto-syncs so anyone else can host next!
+
+---
+
+## 📥 Installation
+
+1. Install **Minecraft 26.3** with **Fabric Loader `>= 0.19.5`**.
+2. Download and install **Fabric API** for Minecraft `26.3`.
+3. Drop `fabric-p2p-world-26.3-2.0.0+26.3.jar` into your `.minecraft/mods/` folder.
+4. Launch the game — open any world, press `Esc`, and click **`Start P2P`**!
+
+---
+
+## 🛠️ Building from Source
 
 ```bash
+git clone https://github.com/Kynxhel/fabric-p2p-world.git
+cd fabric-p2p-world
 ./gradlew build
 ```
 
-The compiled JAR is generated in `build/libs/`.
+The compiled mod JAR will be located in `build/libs/`.
 
 ---
 
-## 🔒 Privacy Policy
+## 🔒 Privacy & Transparency
 
-See [PRIVACY.md](PRIVACY.md) for details on the optional Google Drive integration and P2P networking.
-
-## 📄 License
-
-Licensed under the [MIT License](LICENSE).
+- **Open Source:** 100% auditable Java source code under the [MIT License](LICENSE).
+- **Privacy Policy:** Read [PRIVACY.md](PRIVACY.md) for full details on P2P networking and the optional Google Drive integration.
+- **Bug Reports & Suggestions:** Open an issue on [GitHub Issues](https://github.com/Kynxhel/fabric-p2p-world/issues).
