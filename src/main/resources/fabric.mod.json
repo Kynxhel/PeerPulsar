@@ -3,7 +3,7 @@
   "id": "peerpulsar",
   "version": "${version}",
   "name": "PeerPulsar",
-  "description": "Open-source peer-to-peer world hosting for Minecraft 26.3 with automatic NAT/CGNAT diagnostics, UPnP port forwarding, UDP Hole Punching, Tunnel Relay, smart room codes, and an animated neon glass UI.",
+  "description": "Open-source peer-to-peer world hosting for Minecraft 26.3 with opt-in NAT/CGNAT diagnostics, UPnP port forwarding, UDP Hole Punching, Tunnel Relay, embedded room keys, optional join approval, and configurable network services.",
   "authors": [
     "Kynxhel"
   ],
@@ -17,10 +17,10 @@
   "environment": "client",
   "entrypoints": {
     "main": [
-      "com.p2pworld.FabricP2PMod"
+      "com.kynxhel.peerpulsar.PeerPulsar"
     ],
     "client": [
-      "com.p2pworld.client.FabricP2PClient"
+      "com.kynxhel.peerpulsar.client.PeerPulsarClient"
     ]
   },
   "mixins": [
@@ -30,6 +30,6 @@
     "fabricloader": ">=0.19.5",
     "minecraft": "~26.3",
     "java": ">=25",
-    "fabric-api": "*"
+    "fabric-api": ">=0.165.2+26.3"
   }
 }

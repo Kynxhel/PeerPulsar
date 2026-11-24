@@ -1,6 +1,17 @@
 # Changelog
 
+> **Project History:** Originally created as *FabricP2PMod*, temporarily rebranded to *Atarca* in v3.0.0 (when Cloud Sync / Google OAuth was removed), and renamed to **PeerPulsar** in v3.1.0.
+
+## v3.2.0+26.3
+- **Layer 1 Room Key Everywhere & Hardening:** Enforced the embedded `#KEY` HMAC-SHA256 login challenge across both Mojang Online and Offline LAN Auth on all internet hosting modes (Direct P2P, UDP Hole Punch, Tunnel Relay) and optionally on Local LAN (`Require Room Key on LAN`), added per-IP brute-force rate limiting (5 failures in 30s -> 5m block), randomized the default host port, and fixed MC 26.3 guest command permissions so joiners do not automatically receive commands when cheats are enabled unless opted in via **Advanced → Security**.
+- **New Code, Connected Players & Kick:** Added a mid-session **🔄 New Code** button to rotate the `#KEY` without restarting tunnels or kicking active players, plus a live connected players list with ping and **Kick** buttons on the Host screen.
+- **Optional Layer 2 Join Approval:** Added an optional **Join Approval** toggle (off by default) with queued in-game HUD/screen/chat approval prompts (`[Accept]`, `[Always]`, `[Deny]`), sound alerts, 24s timeout, Ed25519 device + nick matching (`<world>/peerpulsar_approved.json`), and an Approved/Known Players manager in **Advanced**.
+- **Persistent Player Identities & Safe Data Migration:** Added hybrid Mojang session verification for premium joiners in Offline LAN Auth, deterministic Ed25519-key UUIDs for offline joiners, backup-first one-time migration of legacy offline-name playerdata (`<world>/peerpulsar_backups/` + `<world>/peerpulsar_identity_map.json`), `[Export Identity]` / `[Import Identity]` with corrupt/missing key warnings, and host `[Transfer]` data recovery.
+- **Advanced Network Services Menu:** Added `P2PAdvancedScreen` (`⚙ Advanced`) with **Auto (Recommended)** failover, opt-in **Test All** latency checks, custom endpoint validation (`host:port` / `https://`) for **Tunnel Relay**, **UDP Signaling**, and **STUN / Public IP Discovery**, and optional signaling server embedding in UDP room codes (`~<b64>`).
+- **Translations, Packaging & Documentation:** Standardized jar naming (`peerpulsar-3.2.0+26.3.jar`), set minimum `fabric-api` dependency (`>=0.165.2+26.3`), decoupled server login hooks from client classes, added full Turkish (`tr_tr.json`) translations, and aligned `README.md`, `PRIVACY.md`, and `MODRINTH_CURSEFORGE.md`.
+
 ## v3.1.0+26.3
+> **⚠ Security issue in Offline mode, please update to v3.2.0+26.3.**
 - **Rebranded to PeerPulsar:** Renamed the mod, ID (`peerpulsar`), assets, UI titles, chat notifications, and release artifacts (`peerpulsar-26.3-*.jar`) to **PeerPulsar**, and updated the mod icon with the new binary-pulsar logo.
 
 ## v3.0.0+26.3

@@ -1,10 +1,11 @@
 {
   "required": true,
   "minVersion": "0.8",
-  "package": "com.p2pworld.mixin",
+  "package": "com.kynxhel.peerpulsar.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [],
   "client": [
+    "ServerLoginPacketListenerAccessor",
     "ServerLoginPacketListenerImplMixin",
     "IntegratedServerMixin",
     "PauseScreenMixin",
