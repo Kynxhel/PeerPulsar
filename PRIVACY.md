@@ -17,8 +17,9 @@ PeerPulsar **never** contacts external servers on game startup, on the title scr
 `bore.pub`, `ntfy.sh`, and the listed STUN / IP echo endpoints are **optional suggested community defaults** unrelated to the mod author, with no uptime or SLA guarantee. You can freely change, disable, or replace any of them with self-hosted or custom servers in **Advanced → Network Services**.
 
 ### Named First-Use Consent, SSRF & UPnP Hardening
-- Both the host-side **Network Diagnostics** consent prompt and the join-side **UDP P2P Connection Consent** prompt explicitly name `bore.pub` (fallback TCP relay), `ntfy.sh` (AES-256-GCM encrypted UDP signaling), and public STUN / IP echo servers (`stun.l.google.com`, `stun.cloudflare.com`, etc.) as optional free third-party defaults changeable in **⚙ Advanced**.
-- If a UDP room code specifies a custom signaling server URL, PeerPulsar disables HTTP redirects, enforces DNS-rebinding pinned public HTTPS checks (blocking loopback, link-local, and private/internal addresses), and prompts you with an explicit confirmation naming both the custom signaling domain and configured STUN servers before connecting.
+- Host-side **Network Diagnostics** consent (`networkTestConsent`) and join-side **UDP P2P Connection Consent** (`udpJoinConsent`) are tracked independently in `config/peerpulsar.json`. Both prompts explicitly name `bore.pub` (fallback TCP relay), `ntfy.sh` (AES-256-GCM encrypted UDP signaling), and public STUN / IP echo servers (`stun.l.google.com`, `stun.cloudflare.com`, etc.) as optional free third-party defaults changeable in **⚙ Advanced**. Trusting a one-off custom signaling invite never silently grants host diagnostics or default UDP consent.
+- PeerPulsar disables HTTP redirects and enforces public-only validation plus DNS-rebinding pinned resolution (blocking loopback, link-local, RFC1918, CGNAT, and ULA targets) across custom HTTPS signaling/IP-echo URLs as well as custom Tunnel Relay and STUN `host:port` endpoints. Joining a UDP room code with a custom signaling server always prompts you with an explicit confirmation naming both the custom signaling domain and configured STUN servers before connecting.
+- PeerPulsar never writes public IP addresses, peer IP addresses, signaling topic IDs, or `#KEY` room secrets to `latest.log` or host chat logs.
 - During the opt-in **Network Test**, PeerPulsar sends local SSDP multicast packets and briefly tests a temporary 60-second UPnP port mapping (immediately deleted after verification). UPnP SSDP/SOAP requests are strictly restricted to the responding local gateway IP.
 
 ### Zero Session Token Access & End-to-End Encrypted Offline LAN Auth
@@ -32,8 +33,8 @@ PeerPulsar **never** contacts external servers on game startup, on the title scr
 
 ## 3. Local Files Stored on Your Device
 PeerPulsar stores only local files on your machine — nothing is uploaded to the mod author:
-- `config/peerpulsar.json`: Stores your opt-in network test consent, Advanced endpoint settings, and security toggles.
-- `config/peerpulsar/identity.json`: A locally generated Ed25519 key pair used for device verification, name locks, and key-based offline UUIDs. You can export/import a backup from **Advanced → Identity**.
+- `config/peerpulsar.json`: Stores your independent opt-in consent flags (`networkTestConsent`, `udpJoinConsent`), Advanced endpoint settings, and security toggles.
+- `config/peerpulsar/identity.json`: A locally generated Ed25519 key pair (saved with owner-only `0600` permissions on POSIX) used for device verification, name locks, and key-based offline UUIDs. Exporting a backup from **Advanced → Identity** writes to `~/.peerpulsar/peerpulsar-identity-backup.json` (outside `.minecraft` so modpack exports never bundle your private key).
 - `<world>/peerpulsar_name_locks.json`: Stores SHA-256 fingerprints of public keys bound to player names when Offline LAN Auth is used.
 - `<world>/peerpulsar_approved.json`: Stores host-approved players (name, device key fingerprint, and Mojang UUID if applicable) when Join Approval "Always" is used.
 - `<world>/peerpulsar_identity_map.json` & `<world>/peerpulsar_backups/`: Records one-time legacy playerdata migrations and stores automatic backups before any migration or host-initiated data transfer.

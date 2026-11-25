@@ -389,9 +389,9 @@ public class P2PAdvancedScreen extends Screen {
             return;
         }
         boolean valid = switch (activeSection) {
-            case RELAY -> NetworkEndpoints.isValidHostPort(raw);
+            case RELAY -> NetworkEndpoints.isValidPublicHostPort(raw);
             case SIGNALING -> NetworkEndpoints.normalizePublicHttpsUrl(raw) != null;
-            case STUN_IP -> NetworkEndpoints.isValidHostPort(raw) || NetworkEndpoints.normalizePublicHttpsUrl(raw) != null;
+            case STUN_IP -> NetworkEndpoints.isValidPublicHostPort(raw) || NetworkEndpoints.normalizePublicHttpsUrl(raw) != null;
         };
         if (!valid) {
             this.customValidationError = switch (activeSection) {
@@ -433,7 +433,7 @@ public class P2PAdvancedScreen extends Screen {
 
         PeerPulsarConfig cfg = PeerPulsarConfig.get();
         if (activeSection == NetworkSection.RELAY) {
-            NetworkEndpoints.HostPort hp = NetworkEndpoints.parseHostPort(raw);
+            NetworkEndpoints.HostPort hp = NetworkEndpoints.parsePublicHostPort(raw);
             if (hp != null) {
                 cfg.getRelaySection().addCustom(hp.formatted());
                 cfg.save();
@@ -450,7 +450,7 @@ public class P2PAdvancedScreen extends Screen {
                 cfg.getIpEchoSection().addCustom(url);
                 cfg.save();
             } else {
-                NetworkEndpoints.HostPort hp = NetworkEndpoints.parseHostPort(raw);
+                NetworkEndpoints.HostPort hp = NetworkEndpoints.parsePublicHostPort(raw);
                 if (hp != null) {
                     cfg.getStunSection().addCustom(hp.formatted());
                     cfg.save();
@@ -469,7 +469,7 @@ public class P2PAdvancedScreen extends Screen {
         }
         String n = NetworkEndpoints.normalizePublicHttpsUrl(raw);
         if (n != null) return n;
-        NetworkEndpoints.HostPort hp = NetworkEndpoints.parseHostPort(raw);
+        NetworkEndpoints.HostPort hp = NetworkEndpoints.parsePublicHostPort(raw);
         return hp != null ? hp.formatted() : raw;
     }
 
@@ -664,11 +664,23 @@ public class P2PAdvancedScreen extends Screen {
                 Path target = chooseSavePath();
                 if (target == null) return;
                 ClientIdentity.exportTo(target);
-                runOnClient(() -> showToast(tr("screen.peerpulsar.identity.toast_exported", target.getFileName().toString()), NeonTheme.EMERALD));
+                String displayTarget = formatBackupPath(target);
+                runOnClient(() -> showToast(tr("screen.peerpulsar.identity.toast_exported", displayTarget), NeonTheme.EMERALD));
             } catch (Exception e) {
                 runOnClient(() -> showToast("⚠ " + e.getMessage(), NeonTheme.CRIMSON));
             }
         }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
+    }
+
+    private static String formatBackupPath(Path target) {
+        String home = System.getProperty("user.home");
+        if (home != null && !home.isBlank()) {
+            Path homePath = Path.of(home);
+            if (target.startsWith(homePath)) {
+                return "~/" + homePath.relativize(target).toString().replace('\\', '/');
+            }
+        }
+        return target.toString();
     }
 
     private void importIdentity() {
@@ -688,10 +700,14 @@ public class P2PAdvancedScreen extends Screen {
     }
 
     private Path chooseSavePath() {
-        return Minecraft.getInstance().gameDirectory.toPath().resolve("peerpulsar-identity-backup.json");
+        return ClientIdentity.defaultBackupFile();
     }
 
     private Path chooseOpenPath() {
+        Path defaultBackup = ClientIdentity.defaultBackupFile();
+        if (Files.isRegularFile(defaultBackup)) {
+            return defaultBackup;
+        }
         Path gameDir = Minecraft.getInstance().gameDirectory.toPath();
         Path backup = gameDir.resolve("peerpulsar-identity-backup.json");
         if (Files.isRegularFile(backup)) {

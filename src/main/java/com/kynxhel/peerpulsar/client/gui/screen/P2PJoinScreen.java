@@ -251,9 +251,6 @@ public class P2PJoinScreen extends Screen {
         if (target.isUdpHolePunch() && target.hasSignalingServer()) {
             this.minecraft.setScreenAndShow(new ConfirmScreen(
                     confirmed -> {
-                        if (confirmed) {
-                            PeerPulsarConfig.get().setNetworkTestConsent(true);
-                        }
                         if (this.minecraft != null) {
                             this.minecraft.setScreenAndShow(this);
                         }
@@ -269,11 +266,11 @@ public class P2PJoinScreen extends Screen {
             return;
         }
 
-        if (target.isUdpHolePunch() && !PeerPulsarConfig.get().hasNetworkTestConsent()) {
+        if (target.isUdpHolePunch() && !PeerPulsarConfig.get().hasUdpJoinConsent()) {
             this.minecraft.setScreenAndShow(new ConfirmScreen(
                     confirmed -> {
                         if (confirmed) {
-                            PeerPulsarConfig.get().setNetworkTestConsent(true);
+                            PeerPulsarConfig.get().setUdpJoinConsent(true);
                         }
                         if (this.minecraft != null) {
                             this.minecraft.setScreenAndShow(this);

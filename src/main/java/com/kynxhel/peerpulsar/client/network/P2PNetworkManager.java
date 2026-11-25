@@ -600,8 +600,8 @@ public class P2PNetworkManager {
                     return;
                 }
 
-                PeerPulsar.LOGGER.info("[P2P-26.3] World hosted via {}! Room Code: {} -> {}:{}",
-                        candidateMode, candidateRoomCode, candidateHost, candidatePort);
+                PeerPulsar.LOGGER.info("[P2P-26.3] World hosted via {} (roomKeyRequired={}, localPort={}).",
+                        candidateMode, finalRequiresKey, port);
 
                 final String modeTag = switch (candidateMode) {
                     case UDP_HOLE_PUNCH -> "§b[UDP Hole Punch]";
@@ -609,14 +609,13 @@ public class P2PNetworkManager {
                     case LOCAL_LAN -> "§b[Local LAN]";
                     default -> "§a[Direct P2P]";
                 };
-                final String finalRoomCode = candidateRoomCode;
                 client.execute(() -> {
                     if (!isHostGenerationActive(gen)) {
                         return;
                     }
                     if (client.player != null) {
                         client.player.sendSystemMessage(Component.literal(
-                                "§b✦ [PeerPulsar] " + modeTag + " §fWorld is live! Room Code: §b§l" + finalRoomCode));
+                                "§b✦ [PeerPulsar] " + modeTag + " §fWorld is live! Copy the Room Code from the Start P2P screen."));
                     }
                     callback.accept(true);
                 });

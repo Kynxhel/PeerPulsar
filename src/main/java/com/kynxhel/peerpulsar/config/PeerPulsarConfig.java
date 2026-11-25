@@ -23,8 +23,10 @@ public final class PeerPulsarConfig {
 
     private static PeerPulsarConfig instance;
 
-    /** True once the user agreed to the network test contacting third-party services (STUN, IP echo, relay). */
+    /** True once the user agreed to host-side network diagnostics / Test All contacting third-party services. */
     private boolean networkTestConsent = false;
+    /** True once the user agreed to join-side UDP Hole Punching contacting STUN and signaling servers. */
+    private boolean udpJoinConsent = false;
     private boolean identityInitialized = false;
     private boolean requireRoomKeyOnLan = false;
     private boolean giveJoinersCommands = false;
@@ -157,6 +159,15 @@ public final class PeerPulsarConfig {
 
     public synchronized void setNetworkTestConsent(boolean consent) {
         this.networkTestConsent = consent;
+        save();
+    }
+
+    public synchronized boolean hasUdpJoinConsent() {
+        return udpJoinConsent;
+    }
+
+    public synchronized void setUdpJoinConsent(boolean consent) {
+        this.udpJoinConsent = consent;
         save();
     }
 

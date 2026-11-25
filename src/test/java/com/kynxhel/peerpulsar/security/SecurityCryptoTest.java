@@ -7,6 +7,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.Signature;
@@ -240,6 +241,18 @@ class SecurityCryptoTest {
         ClientIdentity imported = ClientIdentity.importIntoFile(exported, importedTarget);
         assertArrayEquals(kp.getPublic().getEncoded(), imported.publicKeyEncoded());
         assertEquals(ClientIdentity.Status.OK, ClientIdentity.inspectStatus(importedTarget, true));
+
+        String userHome = System.getProperty("user.home");
+        if (userHome != null && !userHome.isBlank()) {
+            Path defaultBackup = ClientIdentity.defaultBackupFile();
+            assertEquals(Path.of(userHome, ".peerpulsar", "peerpulsar-identity-backup.json"), defaultBackup);
+        }
+        try {
+            assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(exported)));
+            assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(importedTarget)));
+        } catch (UnsupportedOperationException ignored) {
+            // Non-POSIX filesystem (e.g. Windows)
+        }
     }
 
     @Test

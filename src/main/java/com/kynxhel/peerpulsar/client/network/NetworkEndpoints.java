@@ -6,6 +6,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.DatagramSocket;
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -83,6 +84,43 @@ public final class NetworkEndpoints {
 
     public static boolean isValidHostPort(String raw) {
         return parseHostPort(raw) != null;
+    }
+
+    public static HostPort parsePublicHostPort(String raw) {
+        HostPort hp = parseHostPort(raw);
+        if (hp == null || isNonPublicHostLiteralOrName(hp.host())) {
+            return null;
+        }
+        return hp;
+    }
+
+    public static boolean isValidPublicHostPort(String raw) {
+        return parsePublicHostPort(raw) != null;
+    }
+
+    /**
+     * Resolves {@code host} and pins a verified public IP address (rejecting non-public hosts and
+     * any DNS response containing loopback, link-local, RFC1918, CGNAT, or ULA addresses).
+     */
+    public static InetAddress resolvePinnedPublicAddress(String host, boolean preferIpv4) throws IOException {
+        if (isNonPublicHostLiteralOrName(host)) {
+            throw new IOException("Rejected non-public host: " + host);
+        }
+        String cleanHost = stripBrackets(host.trim());
+        InetAddress[] addrs = InetAddress.getAllByName(cleanHost);
+        if (addrs == null || addrs.length == 0) {
+            throw new IOException("Failed to resolve host: " + cleanHost);
+        }
+        InetAddress preferred = null;
+        for (InetAddress addr : addrs) {
+            if (isNonPublicAddress(addr)) {
+                throw new IOException("Rejected non-public resolved address for host " + cleanHost);
+            }
+            if (preferIpv4 && preferred == null && addr instanceof Inet4Address) {
+                preferred = addr;
+            }
+        }
+        return preferred != null ? preferred : addrs[0];
     }
 
     public static String normalizeHttpsUrl(String raw) {
@@ -469,19 +507,19 @@ public final class NetworkEndpoints {
         Set<String> all = new LinkedHashSet<>(defaults);
         if (section != null) {
             for (String c : section.getCustom()) {
-                HostPort hp = parseHostPort(c);
+                HostPort hp = parsePublicHostPort(c);
                 if (hp != null) all.add(hp.formatted());
             }
         }
         List<HostPort> result = new ArrayList<>();
         if (section != null && PeerPulsarConfig.MODE_MANUAL.equals(section.getMode()) && section.getSelected() != null) {
-            HostPort sel = parseHostPort(section.getSelected());
+            HostPort sel = parsePublicHostPort(section.getSelected());
             if (sel != null) {
                 result.add(sel);
             }
         }
         for (String item : all) {
-            HostPort hp = parseHostPort(item);
+            HostPort hp = parsePublicHostPort(item);
             if (hp != null && !result.contains(hp)) {
                 result.add(hp);
             }
@@ -530,11 +568,12 @@ public final class NetworkEndpoints {
     }
 
     public static long pingRelayMs(String hostPort) {
-        HostPort hp = parseHostPort(hostPort);
+        HostPort hp = parsePublicHostPort(hostPort);
         if (hp == null) return -1;
         long start = System.currentTimeMillis();
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(hp.host(), hp.port()), 2500);
+            InetAddress pinnedAddr = resolvePinnedPublicAddress(hp.host(), false);
+            socket.connect(new InetSocketAddress(pinnedAddr, hp.port()), 2500);
             return Math.max(1L, System.currentTimeMillis() - start);
         } catch (Exception e) {
             return -1;
@@ -594,7 +633,7 @@ public final class NetworkEndpoints {
     }
 
     public static long pingStunMs(String hostPort) {
-        HostPort hp = parseHostPort(hostPort);
+        HostPort hp = parsePublicHostPort(hostPort);
         if (hp == null) return -1;
         long start = System.currentTimeMillis();
         try (DatagramSocket sock = new DatagramSocket()) {

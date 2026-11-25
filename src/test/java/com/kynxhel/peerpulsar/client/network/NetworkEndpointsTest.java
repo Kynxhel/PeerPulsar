@@ -129,4 +129,67 @@ class NetworkEndpointsTest {
         assertThrows(IOException.class, () -> NetworkEndpoints.openPinnedPublicHttpsConnection("http://ntfy.sh/test", 1000, 1000));
         assertThrows(IOException.class, () -> NetworkEndpoints.openPinnedPublicHttpsConnection("https://localhost/test", 1000, 1000));
     }
+
+    @Test
+    void publicHostPortValidationAndPinnedResolutionRejectNonPublicTargets(@TempDir Path tempDir) {
+        assertTrue(NetworkEndpoints.isValidPublicHostPort("bore.pub:7835"));
+        assertTrue(NetworkEndpoints.isValidPublicHostPort("relay.example.com:443"));
+        assertTrue(NetworkEndpoints.isValidPublicHostPort("[2001:db8::1]:7835"));
+
+        assertFalse(NetworkEndpoints.isValidPublicHostPort("localhost:7835"));
+        assertFalse(NetworkEndpoints.isValidPublicHostPort("127.0.0.1:7835"));
+        assertFalse(NetworkEndpoints.isValidPublicHostPort("192.168.1.1:7835"));
+        assertFalse(NetworkEndpoints.isValidPublicHostPort("10.0.0.5:3478"));
+        assertFalse(NetworkEndpoints.isValidPublicHostPort("169.254.169.254:80"));
+        assertFalse(NetworkEndpoints.isValidPublicHostPort("100.64.0.1:7835"));
+        assertFalse(NetworkEndpoints.isValidPublicHostPort("[::1]:7835"));
+        assertFalse(NetworkEndpoints.isValidPublicHostPort("[fc00::1]:7835"));
+        assertFalse(NetworkEndpoints.isValidPublicHostPort("router.lan:7835"));
+
+        PeerPulsarConfig cfg = PeerPulsarConfig.loadFromFile(tempDir.resolve("cfg-ssrf.json"));
+        cfg.getRelaySection().addCustom("127.0.0.1:7835");
+        cfg.getRelaySection().addCustom("192.168.1.50:7835");
+        cfg.getRelaySection().setMode(PeerPulsarConfig.MODE_MANUAL);
+        cfg.getRelaySection().setSelected("127.0.0.1:7835");
+        List<NetworkEndpoints.HostPort> relays = NetworkEndpoints.getOrderedRelays(cfg);
+        assertEquals(1, relays.size());
+        assertEquals("bore.pub:7835", relays.get(0).formatted());
+
+        cfg.getStunSection().addCustom("10.0.0.1:3478");
+        assertTrue(NetworkEndpoints.getOrderedStun(cfg).stream().noneMatch(hp -> hp.host().equals("10.0.0.1")));
+
+        assertEquals(-1L, NetworkEndpoints.pingRelayMs("127.0.0.1:7835"));
+        assertEquals(-1L, NetworkEndpoints.pingStunMs("192.168.1.1:3478"));
+
+        assertThrows(IOException.class, () -> NetworkEndpoints.resolvePinnedPublicAddress("127.0.0.1", false));
+        assertThrows(IOException.class, () -> NetworkEndpoints.resolvePinnedPublicAddress("localhost", true));
+        assertThrows(IOException.class, () -> NetworkEndpoints.resolvePinnedPublicAddress("192.168.1.1", false));
+        assertThrows(IOException.class, () -> NetworkEndpoints.resolvePinnedPublicAddress("169.254.169.254", true));
+    }
+
+    @Test
+    void hostDiagnosticsConsentAndUdpJoinConsentAreIndependent(@TempDir Path tempDir) throws Exception {
+        Path cfgFile = tempDir.resolve("consent-cfg.json");
+        PeerPulsarConfig cfg = PeerPulsarConfig.loadFromFile(cfgFile);
+        assertFalse(cfg.hasNetworkTestConsent());
+        assertFalse(cfg.hasUdpJoinConsent());
+
+        cfg.setUdpJoinConsent(true);
+        assertTrue(cfg.hasUdpJoinConsent());
+        assertFalse(cfg.hasNetworkTestConsent());
+
+        PeerPulsarConfig reloaded = PeerPulsarConfig.loadFromFile(cfgFile);
+        assertTrue(reloaded.hasUdpJoinConsent());
+        assertFalse(reloaded.hasNetworkTestConsent());
+
+        reloaded.setNetworkTestConsent(true);
+        PeerPulsarConfig reloadedBoth = PeerPulsarConfig.loadFromFile(cfgFile);
+        assertTrue(reloadedBoth.hasUdpJoinConsent());
+        assertTrue(reloadedBoth.hasNetworkTestConsent());
+
+        Files.writeString(cfgFile, "{corrupt", StandardCharsets.UTF_8);
+        PeerPulsarConfig corruptReload = PeerPulsarConfig.loadFromFile(cfgFile);
+        assertFalse(corruptReload.hasUdpJoinConsent());
+        assertFalse(corruptReload.hasNetworkTestConsent());
+    }
 }

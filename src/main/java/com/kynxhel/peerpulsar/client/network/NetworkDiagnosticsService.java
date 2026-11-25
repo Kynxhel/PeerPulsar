@@ -175,7 +175,10 @@ public class NetworkDiagnosticsService {
 
             PeerPulsar.LOGGER.info(
                     "[P2P-Diag] Result={} | PublicIP={} | RouterWAN={} | UPnP={} (Map={}) | CGNAT={} | ConeNAT(UDP)={} | Tunnel={} ({}ms)",
-                    finalStatus, publicIp, routerWanIp, probe.upnpFound(), probe.portMappingWorks(),
+                    finalStatus,
+                    publicIp != null ? "<detected>" : "none",
+                    routerWanIp != null ? "<detected>" : "none",
+                    probe.upnpFound(), probe.portMappingWorks(),
                     cgnat, coneNatSupported, tunnelAvailable, tunnelLatency
             );
             return report;

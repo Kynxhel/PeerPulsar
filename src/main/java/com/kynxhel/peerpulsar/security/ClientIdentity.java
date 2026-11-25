@@ -6,10 +6,13 @@ import com.kynxhel.peerpulsar.PeerPulsar;
 import com.kynxhel.peerpulsar.config.PeerPulsarConfig;
 import net.fabricmc.loader.api.FabricLoader;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -19,6 +22,7 @@ import java.security.Signature;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
+import java.util.Set;
 
 /**
  * A persistent, locally generated Ed25519 key pair that identifies this PeerPulsar install.
@@ -45,6 +49,18 @@ public final class ClientIdentity {
 
     public static Path defaultFile() {
         return FabricLoader.getInstance().getConfigDir().resolve("peerpulsar").resolve("identity.json");
+    }
+
+    /**
+     * Default backup path stored outside the Minecraft game/instance directory so exporting
+     * or sharing a modpack folder never accidentally bundles the user's Ed25519 private key.
+     */
+    public static Path defaultBackupFile() {
+        String home = System.getProperty("user.home");
+        if (home != null && !home.isBlank()) {
+            return Path.of(home, ".peerpulsar", "peerpulsar-identity-backup.json");
+        }
+        return defaultFile().getParent().resolve("peerpulsar-identity-backup.json");
     }
 
     public static synchronized Status inspectStatus() {
@@ -115,6 +131,7 @@ public final class ClientIdentity {
             Files.createDirectories(destination.getParent());
         }
         Files.copy(sourceFile, destination, StandardCopyOption.REPLACE_EXISTING);
+        restrictPrivateFilePermissions(destination);
     }
 
     public static synchronized ClientIdentity importFrom(Path source) throws Exception {
@@ -178,11 +195,13 @@ public final class ClientIdentity {
         }
         Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
         Files.writeString(tmp, obj.toString(), StandardCharsets.UTF_8);
+        restrictPrivateFilePermissions(tmp);
         try {
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (Exception atomicEx) {
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
         }
+        restrictPrivateFilePermissions(file);
     }
 
     private static void backupCorruptFileIfPresent(Path file) {
@@ -190,8 +209,25 @@ public final class ClientIdentity {
             if (Files.isRegularFile(file)) {
                 Path bak = file.resolveSibling(file.getFileName() + ".bak-" + System.currentTimeMillis());
                 Files.copy(file, bak, StandardCopyOption.REPLACE_EXISTING);
+                restrictPrivateFilePermissions(bak);
             }
         } catch (Exception ignored) {}
+    }
+
+    private static void restrictPrivateFilePermissions(Path file) {
+        if (file == null) return;
+        try {
+            Set<PosixFilePermission> perms = PosixFilePermissions.fromString("rw-------");
+            Files.setPosixFilePermissions(file, perms);
+        } catch (UnsupportedOperationException | IOException ignored) {
+            try {
+                java.io.File f = file.toFile();
+                f.setReadable(false, false);
+                f.setReadable(true, true);
+                f.setWritable(false, false);
+                f.setWritable(true, true);
+            } catch (Exception ignored2) {}
+        }
     }
 
     public byte[] publicKeyEncoded() {

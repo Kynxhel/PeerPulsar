@@ -162,9 +162,9 @@
   "screen.peerpulsar.advanced.hint_hostport": "+ Özel ekle: host:port (ör. relay.example.com:7835)",
   "screen.peerpulsar.advanced.hint_https": "+ Özel ekle: https://... (ör. https://ntfy.example.com)",
   "screen.peerpulsar.advanced.hint_stun_or_ip": "+ Özel ekle: stun.host:port veya https://ip-echo",
-  "screen.peerpulsar.advanced.err_hostport": "1-65535 arası port ile host:port girin.",
+  "screen.peerpulsar.advanced.err_hostport": "Genel erişilebilir host:port (port 1-65535) girin (özel/yerel adresler engellenir).",
   "screen.peerpulsar.advanced.err_https": "Genel erişilebilir bir https:// URL'si girin (özel/yerel adresler engellenir).",
-  "screen.peerpulsar.advanced.err_stun_or_ip": "Geçerli host:port (STUN) veya https:// URL (IP echo) girin.",
+  "screen.peerpulsar.advanced.err_stun_or_ip": "Genel erişilebilir host:port (STUN) veya https:// URL (IP echo) girin (özel/yerel adresler engellenir).",
   "screen.peerpulsar.advanced.testing_short": "Test ediliyor...",
   "screen.peerpulsar.advanced.test_ok": "Erişilebilir (%s ms)",
   "screen.peerpulsar.advanced.test_fail": "Erişilemiyor",
@@ -197,6 +197,6 @@
   "screen.peerpulsar.identity.warning_private": "Bu dosyayı gizli tutun. Paylaşırsanız offline kimliğiniz taklit edilebilir.",
   "screen.peerpulsar.identity.toast_exported": "Kimlik dışa aktarıldı: %s (bu dosyayı gizli tutun!).",
   "screen.peerpulsar.identity.toast_imported": "Kimlik içe aktarıldı! Parmak izi: %s",
-  "screen.peerpulsar.identity.toast_import_not_found": "Yedek bulunamadı. peerpulsar-identity-backup.json dosyasını Minecraft klasörüne koyun.",
+  "screen.peerpulsar.identity.toast_import_not_found": "Yedek bulunamadı. peerpulsar-identity-backup.json dosyasını ~/.peerpulsar/ (veya Minecraft klasörünüze) koyun.",
   "screen.peerpulsar.identity.toast_recreated": "Yeni Ed25519 kimliği oluşturuldu."
 }

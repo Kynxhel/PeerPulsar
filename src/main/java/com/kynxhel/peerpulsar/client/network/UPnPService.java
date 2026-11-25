@@ -263,8 +263,8 @@ public class UPnPService {
                         if (grantedLease > 0) {
                             scheduleLeaseRenewalLocked(attemptGen, port, localIp, description, grantedLease);
                         }
-                        PeerPulsar.LOGGER.info("[UPnP] Port {} mapped to {}. External IP: {} (lease={}s)",
-                                port, localIp, externalIp, grantedLease);
+                        PeerPulsar.LOGGER.info("[UPnP] Port {} mapped via IGD (externalIp={}, lease={}s).",
+                                port, (externalIp != null && !externalIp.isEmpty()) ? "<detected>" : "none", grantedLease);
                         return true;
                     } else {
                         if (this.mapAttemptGen.get() == attemptGen) {

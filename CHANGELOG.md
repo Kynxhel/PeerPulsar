@@ -2,6 +2,12 @@
 
 > **Project History:** Originally created as *FabricP2PMod*, temporarily rebranded to *Atarca* in v3.0.0 (when Cloud Sync / Google OAuth was removed), and renamed to **PeerPulsar** in v3.1.0.
 
+## v3.2.3+26.3
+- **Log Privacy Redaction:** Removed public IP addresses, router WAN IPs, peer IP addresses, signaling topic IDs, and room codes/`#KEY` secrets from `latest.log` and host chat log output so sharing game logs for troubleshooting never leaks sensitive network or room credentials.
+- **Independent Host & Join Consent Flags:** Separated host-side Network Diagnostics consent (`networkTestConsent`) from join-side UDP P2P consent (`udpJoinConsent`), and ensured trusting a one-off custom signaling invite no longer auto-grants host diagnostics or default UDP consent.
+- **Relay & STUN SSRF Hardening:** Extended public-only validation and DNS-rebinding pinned resolution (`resolvePinnedPublicAddress`) to custom Tunnel Relay and STUN `host:port` endpoints in `NetworkEndpoints`, `TunnelRelayService`, `UdpHolePunchService`, and `P2PAdvancedScreen`, blocking loopback, link-local, RFC1918, CGNAT, and ULA targets.
+- **Identity Key & Out-of-Instance Backup Hardening:** Applied owner-only file permissions (`0600` on POSIX / owner-only ACL fallback) to `identity.json`, backups, and exported keys, and moved default identity backup exports outside `.minecraft` (`~/.peerpulsar/peerpulsar-identity-backup.json`, while retaining legacy `.minecraft` import fallback) so exporting modpacks never bundles private keys.
+
 ## v3.2.2+26.3
 - **End-to-End Encrypted Offline LAN Auth & Zero Session Token Access:** Enabled Minecraft's native RSA + AES-CFB8 transport encryption (`shouldAuthenticate = false`) in Offline LAN Auth, channel-bound via SHA-256 host key hash into the `#KEY` HMAC and Ed25519 signature to protect gameplay traffic against MITM and eavesdropping even over `bore.pub` or UDP Hole Punch, and removed hybrid Mojang session checks so PeerPulsar never reads `User.getAccessToken()` or contacts Mojang session servers on behalf of clients.
 - **Named First-Use Consent & Storefront Disclosures:** Updated host diagnostics, UDP join consent, custom signaling warning, Offline LAN Auth warning, and HTTPS error strings (`en_us.json` / `tr_tr.json`) plus `README.md`, `MODRINTH_CURSEFORGE.md`, and `PRIVACY.md` to explicitly name `bore.pub`, `ntfy.sh`, and STUN/IP echo servers as optional free third-party defaults changeable in **⚙ Advanced**.

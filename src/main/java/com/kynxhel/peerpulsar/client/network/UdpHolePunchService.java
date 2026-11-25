@@ -14,7 +14,6 @@ import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
-import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
@@ -269,8 +268,8 @@ public class UdpHolePunchService {
                     signalThread.start();
                 }
 
-                PeerPulsar.LOGGER.info("[P2P-UDP] Host ready! RoomCode={} | Signaling={} | STUN={}:{} -> 127.0.0.1:{}",
-                        roomCode, finalSignaling, publicIp, publicPort, localMcPort);
+                PeerPulsar.LOGGER.info("[P2P-UDP] Host ready! Signaling={} -> 127.0.0.1:{}",
+                        finalSignaling, localMcPort);
                 return new HostStartResult(true, roomCode, publicIp, publicPort, null, finalSignaling);
             } catch (Exception e) {
                 PeerPulsar.LOGGER.error("[P2P-UDP] Failed to start UDP host: {}", e.getMessage());
@@ -451,7 +450,7 @@ public class UdpHolePunchService {
                 PeerPulsar.LOGGER.warn("[P2P-UDP] Max host sessions ({}) reached; ignoring session {}", MAX_HOST_SESSIONS, sessionId);
                 return null;
             }
-            PeerPulsar.LOGGER.info("[P2P-UDP] Peer punched through! Session={} Remote={}", sessionId, remoteAddr);
+            PeerPulsar.LOGGER.info("[P2P-UDP] Peer punched through! Session={}", sessionId);
             PeerSession[] ref = new PeerSession[1];
             session = new PeerSession(sessionId, udp, remoteAddr, () -> {
                 if (ref[0] != null) {
@@ -819,8 +818,8 @@ public class UdpHolePunchService {
                     acceptThread.start();
                 }
 
-                PeerPulsar.LOGGER.info("[P2P-UDP] Direct UDP P2P punched to {}! Local MC proxy on 127.0.0.1:{}",
-                        punchedHostAddr, localProxyPort);
+                PeerPulsar.LOGGER.info("[P2P-UDP] Direct UDP P2P punched! Local MC proxy on 127.0.0.1:{}",
+                        localProxyPort);
                 return new ClientProxyResult(true, localProxyPort, null);
             } catch (Exception e) {
                 PeerPulsar.LOGGER.error("[P2P-UDP] Client hole punch error: {}", e.getMessage());
@@ -1246,12 +1245,7 @@ public class UdpHolePunchService {
     }
 
     private static InetAddress resolveIpv4(String host) throws IOException {
-        for (InetAddress addr : InetAddress.getAllByName(host)) {
-            if (addr instanceof Inet4Address) {
-                return addr;
-            }
-        }
-        return InetAddress.getByName(host);
+        return NetworkEndpoints.resolvePinnedPublicAddress(host, true);
     }
 
     public static InetSocketAddress queryStunOnSocket(DatagramSocket socket, String host, int port) {
@@ -1370,7 +1364,7 @@ public class UdpHolePunchService {
             }
             int status = conn.getResponseCode();
             if (status < 200 || status >= 300) {
-                PeerPulsar.LOGGER.warn("[P2P-UDP] Signaling publish to {} returned HTTP {}", topic, status);
+                PeerPulsar.LOGGER.warn("[P2P-UDP] Signaling publish returned HTTP {}", status);
                 throw new IOException("Signaling server returned HTTP " + status);
             }
         } finally {

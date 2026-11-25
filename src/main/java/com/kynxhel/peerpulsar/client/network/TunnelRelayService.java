@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -75,7 +76,8 @@ public class TunnelRelayService {
         for (NetworkEndpoints.HostPort relay : relays) {
             long start = System.currentTimeMillis();
             try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress(relay.host(), relay.port()), 2500);
+                InetAddress pinned = NetworkEndpoints.resolvePinnedPublicAddress(relay.host(), false);
+                socket.connect(new InetSocketAddress(pinned, relay.port()), 2500);
                 return Math.max(1L, System.currentTimeMillis() - start);
             } catch (Exception ignored) {}
         }
@@ -108,8 +110,9 @@ public class TunnelRelayService {
                 Socket ctrl = null;
                 boolean handedOff = false;
                 try {
+                    final InetAddress pinnedRelayAddr = NetworkEndpoints.resolvePinnedPublicAddress(relay.host(), false);
                     ctrl = new Socket();
-                    ctrl.connect(new InetSocketAddress(relay.host(), relay.port()), 5000);
+                    ctrl.connect(new InetSocketAddress(pinnedRelayAddr, relay.port()), 5000);
                     ctrl.setSoTimeout(10000);
                     ctrl.setTcpNoDelay(true);
                     ctrl.setKeepAlive(true);
@@ -149,15 +152,15 @@ public class TunnelRelayService {
                         handedOff = true;
 
                         Thread controlThread = new Thread(
-                                () -> runControlLoop(committedCtrl, relayHost, relayControlPort, localPort),
+                                () -> runControlLoop(committedCtrl, pinnedRelayAddr, relayControlPort, localPort),
                                 "PeerPulsar-Tunnel-Control"
                         );
                         controlThread.setDaemon(true);
                         controlThread.start();
                     }
 
-                    PeerPulsar.LOGGER.info("[P2P-Tunnel] Tunnel established via {}! {}:{} -> 127.0.0.1:{}",
-                            relay.formatted(), relayHost, assignedPort, localPort);
+                    PeerPulsar.LOGGER.info("[P2P-Tunnel] Tunnel established via {} -> 127.0.0.1:{}",
+                            relay.formatted(), localPort);
 
                     return new TunnelStartResult(true, relayHost, assignedPort, null);
                 } catch (Exception e) {
@@ -175,7 +178,7 @@ public class TunnelRelayService {
         }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
     }
 
-    private void runControlLoop(Socket ctrl, String relayHost, int relayControlPort, int localPort) {
+    private void runControlLoop(Socket ctrl, InetAddress pinnedRelayAddr, int relayControlPort, int localPort) {
         String dropReason = null;
         try {
             InputStream in = ctrl.getInputStream();
@@ -194,7 +197,7 @@ public class TunnelRelayService {
                         JsonObject obj = elem.getAsJsonObject();
                         if (obj.has("Connection")) {
                             String uuid = obj.get("Connection").getAsString();
-                            spawnConnectionProxy(ctrl, relayHost, relayControlPort, uuid, localPort);
+                            spawnConnectionProxy(ctrl, pinnedRelayAddr, relayControlPort, uuid, localPort);
                         } else if (obj.has("Error")) {
                             PeerPulsar.LOGGER.warn("[P2P-Tunnel] Relay error: {}", obj.get("Error").getAsString());
                         }
@@ -232,7 +235,7 @@ public class TunnelRelayService {
         }
     }
 
-    private void spawnConnectionProxy(Socket expectedCtrl, String relayHost, int relayControlPort, String uuid, int localPort) {
+    private void spawnConnectionProxy(Socket expectedCtrl, InetAddress pinnedRelayAddr, int relayControlPort, String uuid, int localPort) {
         int current = pendingOrActiveStreams.incrementAndGet();
         if (current > MAX_CONCURRENT_STREAMS) {
             pendingOrActiveStreams.decrementAndGet();
@@ -249,7 +252,7 @@ public class TunnelRelayService {
                 }
 
                 remoteSock = new Socket();
-                remoteSock.connect(new InetSocketAddress(relayHost, relayControlPort), 5000);
+                remoteSock.connect(new InetSocketAddress(pinnedRelayAddr, relayControlPort), 5000);
                 remoteSock.setTcpNoDelay(true);
                 JsonObject acceptObj = new JsonObject();
                 acceptObj.addProperty("Accept", uuid);

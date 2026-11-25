@@ -162,9 +162,9 @@
   "screen.peerpulsar.advanced.hint_hostport": "+ Add custom: host:port (e.g. relay.example.com:7835)",
   "screen.peerpulsar.advanced.hint_https": "+ Add custom: https://... (e.g. https://ntfy.example.com)",
   "screen.peerpulsar.advanced.hint_stun_or_ip": "+ Add custom: stun.host:port or https://ip-echo",
-  "screen.peerpulsar.advanced.err_hostport": "Enter host:port with port 1-65535.",
+  "screen.peerpulsar.advanced.err_hostport": "Enter a public host:port with port 1-65535 (private/local addresses are blocked).",
   "screen.peerpulsar.advanced.err_https": "Enter a public https:// URL (private/local addresses are blocked).",
-  "screen.peerpulsar.advanced.err_stun_or_ip": "Enter valid host:port (STUN) or https:// URL (IP echo).",
+  "screen.peerpulsar.advanced.err_stun_or_ip": "Enter a public host:port (STUN) or https:// URL (IP echo) — private/local addresses are blocked.",
   "screen.peerpulsar.advanced.testing_short": "Testing...",
   "screen.peerpulsar.advanced.test_ok": "Reachable (%s ms)",
   "screen.peerpulsar.advanced.test_fail": "Unreachable",
@@ -197,6 +197,6 @@
   "screen.peerpulsar.identity.warning_private": "Keep this file private. Anyone with it can impersonate your offline identity.",
   "screen.peerpulsar.identity.toast_exported": "Identity exported to %s (keep this file private!).",
   "screen.peerpulsar.identity.toast_imported": "Identity imported! Fingerprint: %s",
-  "screen.peerpulsar.identity.toast_import_not_found": "No backup found. Place peerpulsar-identity-backup.json in your Minecraft folder.",
+  "screen.peerpulsar.identity.toast_import_not_found": "No backup found. Place peerpulsar-identity-backup.json in ~/.peerpulsar/ (or your Minecraft folder).",
   "screen.peerpulsar.identity.toast_recreated": "Created a new Ed25519 identity."
 }
