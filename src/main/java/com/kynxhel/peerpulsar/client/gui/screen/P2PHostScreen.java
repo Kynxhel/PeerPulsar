@@ -1,5 +1,6 @@
 package com.kynxhel.peerpulsar.client.gui.screen;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import com.kynxhel.peerpulsar.client.gui.fx.NeonRenderUtils;
 import com.kynxhel.peerpulsar.client.gui.fx.NeonTheme;
 import com.kynxhel.peerpulsar.client.gui.fx.ParticleBackground;
@@ -13,23 +14,27 @@ import com.kynxhel.peerpulsar.client.network.P2PNetworkManager.ConnectionMode;
 import com.kynxhel.peerpulsar.client.network.RoomCodeHelper;
 import com.kynxhel.peerpulsar.client.network.UPnPService;
 import com.kynxhel.peerpulsar.config.PeerPulsarConfig;
+import com.kynxhel.peerpulsar.security.ApprovedPlayerStore;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.NameAndId;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.storage.LevelResource;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 public class P2PHostScreen extends Screen {
-    private record ConnectedPlayerEntry(UUID uuid, String name, int pingMs, boolean isHost) {}
+    private record ConnectedPlayerEntry(UUID uuid, String name, int pingMs, boolean isHost, boolean isOp) {}
 
     private final Screen parent;
     private final P2PNetworkManager networkManager;
@@ -701,9 +706,11 @@ public class P2PHostScreen extends Screen {
         IntegratedServer server = this.minecraft.getSingleplayerServer();
         List<ConnectedPlayerEntry> list = new ArrayList<>();
         for (ServerPlayer p : server.getPlayerList().getPlayers()) {
-            boolean isHost = server.isSingleplayerOwner(new NameAndId(p.getGameProfile()));
+            NameAndId nid = new NameAndId(p.getGameProfile());
+            boolean isHost = server.isSingleplayerOwner(nid);
+            boolean isOp = !isHost && server.getPlayerList().isOp(nid);
             int ping = isHost ? 0 : p.connection.latency();
-            list.add(new ConnectedPlayerEntry(p.getUUID(), p.getScoreboardName(), ping, isHost));
+            list.add(new ConnectedPlayerEntry(p.getUUID(), p.getScoreboardName(), ping, isHost, isOp));
         }
         return list;
     }
@@ -984,14 +991,28 @@ public class P2PHostScreen extends Screen {
 
             int rightLimit = listX + listW - 4;
             if (!entry.isHost()) {
-                int kickW = 28;
+                int kickW = 24;
+                int opW = 22;
+                int btnGap = 2;
                 int kickX = listX + listW - kickW - 3;
-                int kickY = ry + 2;
-                boolean hov = mouseX >= kickX && mouseX <= kickX + kickW && mouseY >= kickY && mouseY <= kickY + 13;
-                graphics.fill(kickX, kickY, kickX + kickW, kickY + 13, NeonTheme.withAlpha(NeonTheme.CRIMSON, hov ? 150 : 65));
-                graphics.outline(kickX, kickY, kickW, 13, NeonTheme.withAlpha(NeonTheme.CRIMSON, hov ? 255 : 165));
-                graphics.centeredText(this.font, tr("screen.peerpulsar.host.btn_kick"), kickX + kickW / 2, kickY + 3, NeonTheme.TEXT_PRIMARY);
-                rightLimit = kickX - 3;
+                int opX = kickX - opW - btnGap;
+                int btnY = ry + 2;
+
+                boolean kickHov = mouseX >= kickX && mouseX <= kickX + kickW && mouseY >= btnY && mouseY <= btnY + 13;
+                graphics.fill(kickX, btnY, kickX + kickW, btnY + 13, NeonTheme.withAlpha(NeonTheme.CRIMSON, kickHov ? 150 : 65));
+                graphics.outline(kickX, btnY, kickW, 13, NeonTheme.withAlpha(NeonTheme.CRIMSON, kickHov ? 255 : 165));
+                graphics.centeredText(this.font, tr("screen.peerpulsar.host.btn_kick"), kickX + kickW / 2, btnY + 3, NeonTheme.TEXT_PRIMARY);
+
+                boolean opHov = mouseX >= opX && mouseX <= opX + opW && mouseY >= btnY && mouseY <= btnY + 13;
+                int opAccent = entry.isOp() ? NeonTheme.AMBER : NeonTheme.SLATE;
+                int opFillAlpha = entry.isOp() ? (opHov ? 185 : 115) : (opHov ? 115 : 40);
+                int opBorderAlpha = entry.isOp() ? 255 : (opHov ? 235 : 130);
+                graphics.fill(opX, btnY, opX + opW, btnY + 13, NeonTheme.withAlpha(opAccent, opFillAlpha));
+                graphics.outline(opX, btnY, opW, 13, NeonTheme.withAlpha(opAccent, opBorderAlpha));
+                graphics.centeredText(this.font, tr("screen.peerpulsar.host.btn_op"), opX + opW / 2, btnY + 3,
+                        entry.isOp() ? 0xFFFFFFFF : NeonTheme.TEXT_SECONDARY);
+
+                rightLimit = opX - 3;
             }
 
             String pingStr = entry.isHost() ? "HOST" : (entry.pingMs() + "ms");
@@ -999,12 +1020,13 @@ public class P2PHostScreen extends Screen {
             int pingColor = entry.isHost() ? NeonTheme.withAlpha(NeonTheme.EMERALD, 255) : NeonTheme.TEXT_SECONDARY;
             graphics.text(this.font, pingStr, rightLimit - pingW, ry + 5, pingColor, false);
 
-            int maxNameW = Math.max(24, (rightLimit - pingW - 4) - (listX + 5));
+            int maxNameW = Math.max(20, (rightLimit - pingW - 4) - (listX + 5));
             String drawnName = entry.name();
             if (this.font.width(drawnName) > maxNameW) {
                 drawnName = this.font.plainSubstrByWidth(drawnName, Math.max(10, maxNameW - 6)) + "..";
             }
-            graphics.text(this.font, drawnName, listX + 5, ry + 5, NeonTheme.TEXT_PRIMARY, false);
+            graphics.text(this.font, drawnName, listX + 5, ry + 5,
+                    entry.isOp() ? NeonTheme.withAlpha(NeonTheme.AMBER, 255) : NeonTheme.TEXT_PRIMARY, entry.isOp());
         }
 
         int hintY = cardY + sidePanelH - 14;
@@ -1018,7 +1040,7 @@ public class P2PHostScreen extends Screen {
         if (super.mouseClicked(event, doubleClick)) {
             return true;
         }
-        if (event.button() == 0 && networkManager.isP2PActive()) {
+        if (event.button() == InputConstants.MOUSE_BUTTON_LEFT && networkManager.isP2PActive()) {
             int cardY = topY + (compact ? 28 : 34);
             int sideCardH = compact ? 28 : 31;
             int sideCardGap = compact ? 4 : 5;
@@ -1037,11 +1059,24 @@ public class P2PHostScreen extends Screen {
                 ConnectedPlayerEntry entry = players.get(i + playersScroll);
                 if (entry.isHost()) continue;
                 int ry = listY + i * rowH;
-                int kickW = 28;
+                int kickW = 24;
+                int opW = 22;
+                int btnGap = 2;
                 int kickX = listX + listW - kickW - 3;
-                int kickY = ry + 2;
-                if (mx >= kickX && mx <= kickX + kickW && my >= kickY && my <= kickY + 13) {
+                int opX = kickX - opW - btnGap;
+                int btnY = ry + 2;
+                if (mx >= kickX && mx <= kickX + kickW && my >= btnY && my <= btnY + 13) {
+                    if (this.minecraft != null) {
+                        this.minecraft.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0f));
+                    }
                     kickPlayer(entry);
+                    return true;
+                }
+                if (mx >= opX && mx <= opX + opW && my >= btnY && my <= btnY + 13) {
+                    if (this.minecraft != null) {
+                        this.minecraft.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0f));
+                    }
+                    togglePlayerOp(entry);
                     return true;
                 }
             }
@@ -1058,16 +1093,48 @@ public class P2PHostScreen extends Screen {
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
     }
 
+    private void togglePlayerOp(ConnectedPlayerEntry entry) {
+        if (this.minecraft == null || this.minecraft.getSingleplayerServer() == null) return;
+        IntegratedServer server = this.minecraft.getSingleplayerServer();
+        final boolean grantOp = !entry.isOp();
+        server.execute(() -> {
+            ServerPlayer target = server.getPlayerList().getPlayer(entry.uuid());
+            if (target == null) return;
+            NameAndId nid = new NameAndId(target.getGameProfile());
+            if (grantOp) {
+                server.getPlayerList().op(nid);
+                server.getPlayerList().sendPlayerPermissionLevel(target);
+                target.sendSystemMessage(Component.translatable("screen.peerpulsar.host.msg_op_granted"));
+            } else {
+                server.getPlayerList().deop(nid);
+                server.getPlayerList().sendPlayerPermissionLevel(target);
+                target.sendSystemMessage(Component.translatable("screen.peerpulsar.host.msg_op_revoked"));
+            }
+        });
+        showToast(
+                tr(grantOp ? "screen.peerpulsar.host.toast_op_granted" : "screen.peerpulsar.host.toast_op_revoked", entry.name()),
+                grantOp ? NeonTheme.AMBER : NeonTheme.SLATE
+        );
+    }
+
     private void kickPlayer(ConnectedPlayerEntry entry) {
         if (this.minecraft == null || this.minecraft.getSingleplayerServer() == null) return;
         IntegratedServer server = this.minecraft.getSingleplayerServer();
+        boolean revokedApproval = ApprovedPlayerStore.removeByNameOrUuid(
+                server.getWorldPath(LevelResource.ROOT),
+                entry.name(),
+                entry.uuid()
+        );
         server.execute(() -> {
             ServerPlayer target = server.getPlayerList().getPlayer(entry.uuid());
             if (target != null) {
                 target.connection.disconnect(Component.translatable("screen.peerpulsar.host.kicked_reason"));
             }
         });
-        showToast(tr("screen.peerpulsar.host.toast_kicked", entry.name()), NeonTheme.CRIMSON);
+        showToast(
+                tr(revokedApproval ? "screen.peerpulsar.host.toast_kicked_revoked" : "screen.peerpulsar.host.toast_kicked", entry.name()),
+                NeonTheme.CRIMSON
+        );
     }
 
     @Override

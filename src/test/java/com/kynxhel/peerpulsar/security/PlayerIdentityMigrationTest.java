@@ -108,4 +108,31 @@ class PlayerIdentityMigrationTest {
         assertArrayEquals(oldBytes, Files.readAllBytes(oldDat));
         assertArrayEquals(prevNewBytes, Files.readAllBytes(res.backupDir().resolve("playerdata").resolve(newUuid + ".dat")));
     }
+
+    @Test
+    void modernMc263PlayersSubdirectoryLayoutWorksForMigrationAndTransfer(@TempDir Path worldDir) throws Exception {
+        UUID oldUuid = UUID.randomUUID();
+        UUID newUuid = UUID.randomUUID();
+        byte[] oldBytes = "mc263-player-data".getBytes(StandardCharsets.UTF_8);
+        byte[] advBytes = "{\"adv\":true}".getBytes(StandardCharsets.UTF_8);
+        byte[] statBytes = "{\"stat\":1}".getBytes(StandardCharsets.UTF_8);
+
+        Path dataDir = worldDir.resolve("players").resolve("data");
+        Path advDir = worldDir.resolve("players").resolve("advancements");
+        Path statDir = worldDir.resolve("players").resolve("stats");
+        Files.createDirectories(dataDir);
+        Files.createDirectories(advDir);
+        Files.createDirectories(statDir);
+        Files.write(dataDir.resolve(oldUuid + ".dat"), oldBytes);
+        Files.write(advDir.resolve(oldUuid + ".json"), advBytes);
+        Files.write(statDir.resolve(oldUuid + ".json"), statBytes);
+
+        assertEquals(dataDir, PlayerDataMigrator.resolvePlayerDataDir(worldDir));
+        PlayerDataMigrator.TransferResult res = PlayerDataMigrator.transferPlayerData(worldDir, oldUuid, newUuid);
+        assertTrue(res.success());
+        assertEquals(3, res.filesCopied());
+        assertArrayEquals(oldBytes, Files.readAllBytes(dataDir.resolve(newUuid + ".dat")));
+        assertArrayEquals(advBytes, Files.readAllBytes(advDir.resolve(newUuid + ".json")));
+        assertArrayEquals(statBytes, Files.readAllBytes(statDir.resolve(newUuid + ".json")));
+    }
 }

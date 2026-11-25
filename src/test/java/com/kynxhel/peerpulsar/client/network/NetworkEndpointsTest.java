@@ -86,7 +86,7 @@ class NetworkEndpointsTest {
         assertNotNull(cfg);
         assertFalse(cfg.hasNetworkTestConsent());
         assertFalse(cfg.isUseDefaultPort());
-        assertFalse(cfg.isJoinApprovalEnabled());
+        assertTrue(cfg.isJoinApprovalEnabled());
         assertFalse(cfg.isRequireRoomKeyOnLan());
         assertFalse(cfg.isGiveJoinersCommands());
         assertEquals(PeerPulsarConfig.MODE_AUTO, cfg.getRelaySection().getMode());

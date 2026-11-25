@@ -11,6 +11,7 @@
     "ServerLoginPacketListenerAccessor",
     "ServerLoginPacketListenerImplMixin",
     "IntegratedServerMixin",
+    "MinecraftTitleMixin",
     "PauseScreenMixin",
     "TitleScreenMixin",
     "JoinMultiplayerScreenMixin"

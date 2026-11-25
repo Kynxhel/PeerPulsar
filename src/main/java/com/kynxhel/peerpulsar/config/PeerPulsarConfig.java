@@ -3,6 +3,7 @@ package com.kynxhel.peerpulsar.config;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.kynxhel.peerpulsar.PeerPulsar;
+import com.kynxhel.peerpulsar.client.network.UdpTransportMode;
 import net.fabricmc.loader.api.FabricLoader;
 
 import java.nio.charset.StandardCharsets;
@@ -31,7 +32,9 @@ public final class PeerPulsarConfig {
     private boolean requireRoomKeyOnLan = false;
     private boolean giveJoinersCommands = false;
     private boolean useDefaultPort = false;
-    private boolean joinApprovalEnabled = false;
+    private boolean joinApprovalEnabled = true;
+    private String udpTransportMode = UdpTransportMode.AUTO.configValue();
+    private boolean autoTransportRecommendations = true;
 
     private ServiceSection relay = new ServiceSection();
     private ServiceSection signaling = new ServiceSection();
@@ -151,6 +154,7 @@ public final class PeerPulsarConfig {
         signaling.normalize();
         stun.normalize();
         ipEcho.normalize();
+        udpTransportMode = UdpTransportMode.fromConfigString(udpTransportMode).configValue();
     }
 
     public synchronized boolean hasNetworkTestConsent() {
@@ -213,6 +217,24 @@ public final class PeerPulsarConfig {
 
     public synchronized void setJoinApprovalEnabled(boolean joinApprovalEnabled) {
         this.joinApprovalEnabled = joinApprovalEnabled;
+        save();
+    }
+
+    public synchronized UdpTransportMode getUdpTransportModeEnum() {
+        return UdpTransportMode.fromConfigString(udpTransportMode);
+    }
+
+    public synchronized void setUdpTransportMode(UdpTransportMode mode) {
+        this.udpTransportMode = (mode != null ? mode : UdpTransportMode.AUTO).configValue();
+        save();
+    }
+
+    public synchronized boolean isAutoTransportRecommendations() {
+        return autoTransportRecommendations;
+    }
+
+    public synchronized void setAutoTransportRecommendations(boolean autoTransportRecommendations) {
+        this.autoTransportRecommendations = autoTransportRecommendations;
         save();
     }
 

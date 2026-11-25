@@ -1,5 +1,6 @@
 package com.kynxhel.peerpulsar.client.gui;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import com.kynxhel.peerpulsar.client.gui.fx.NeonTheme;
 import com.kynxhel.peerpulsar.security.JoinApprovalManager;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -175,7 +176,7 @@ public final class JoinApprovalOverlay {
     }
 
     private static boolean handleScreenClick(Screen screen, MouseButtonEvent event) {
-        if (event.button() != 0) return true;
+        if (event.button() != InputConstants.MOUSE_BUTTON_LEFT) return true;
         JoinApprovalManager.PendingRequest req = JoinApprovalManager.getInstance().peekCurrent();
         if (req == null) return true;
 
@@ -190,18 +191,28 @@ public final class JoinApprovalOverlay {
         double mx = event.x();
         double my = event.y();
         if (isInside(mx, my, x + 8, btnY, btnW, btnH)) {
+            playClickSound();
             JoinApprovalManager.getInstance().decide(req.id(), JoinApprovalManager.Decision.ACCEPT);
             return false;
         }
         if (isInside(mx, my, x + 8 + btnW + gap, btnY, btnW, btnH)) {
+            playClickSound();
             JoinApprovalManager.getInstance().decide(req.id(), JoinApprovalManager.Decision.ALWAYS);
             return false;
         }
         if (isInside(mx, my, x + 8 + (btnW + gap) * 2, btnY, btnW, btnH)) {
+            playClickSound();
             JoinApprovalManager.getInstance().decide(req.id(), JoinApprovalManager.Decision.DENY);
             return false;
         }
         return true;
+    }
+
+    private static void playClickSound() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc != null) {
+            mc.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0f));
+        }
     }
 
     private static boolean isInside(double mx, double my, int x, int y, int w, int h) {

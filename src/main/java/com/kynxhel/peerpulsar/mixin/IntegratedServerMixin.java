@@ -4,6 +4,9 @@ import com.kynxhel.peerpulsar.PeerPulsar;
 import com.kynxhel.peerpulsar.client.network.P2PNetworkManager;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.permissions.LevelBasedPermissionSet;
+import net.minecraft.server.players.NameAndId;
+import net.minecraft.server.players.ServerOpListEntry;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -35,5 +38,23 @@ public abstract class IntegratedServerMixin {
             return;
         }
         ((MinecraftServer) (Object) this).setUsesAuthentication(!manager.isOfflineModeEnabled());
+    }
+
+    /**
+     * Honors per-guest OP entries from {@code PlayerList.op(NameAndId)} on IntegratedServer
+     * even when global {@code guestCommandAccess} is disabled, so the host can grant and revoke
+     * OP individually for each connected guest.
+     */
+    @Inject(
+            method = "getProfilePermissions(Lnet/minecraft/server/players/NameAndId;)Lnet/minecraft/server/permissions/LevelBasedPermissionSet;",
+            at = @At("HEAD"),
+            cancellable = true
+    )
+    private void peerpulsar$honorPerGuestOp(NameAndId nameAndId, CallbackInfoReturnable<LevelBasedPermissionSet> cir) {
+        MinecraftServer server = (MinecraftServer) (Object) this;
+        if (nameAndId != null && !server.isSingleplayerOwner(nameAndId) && server.getPlayerList().isOp(nameAndId)) {
+            ServerOpListEntry entry = server.getPlayerList().getOps().get(nameAndId);
+            cir.setReturnValue(entry != null ? entry.permissions() : server.operatorUserPermissions());
+        }
     }
 }

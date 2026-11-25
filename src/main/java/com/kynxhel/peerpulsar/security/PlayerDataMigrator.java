@@ -35,6 +35,46 @@ public final class PlayerDataMigrator {
 
     private PlayerDataMigrator() {}
 
+    /**
+     * Resolves the playerdata directory for Minecraft 26.3 ({@code players/data}),
+     * falling back to legacy {@code playerdata} when present (e.g. upgraded worlds or tests).
+     */
+    public static Path resolvePlayerDataDir(Path worldDir) {
+        Path modern = worldDir.resolve("players").resolve("data");
+        if (Files.isDirectory(modern)) {
+            return modern;
+        }
+        Path legacy = worldDir.resolve("playerdata");
+        if (Files.isDirectory(legacy)) {
+            return legacy;
+        }
+        return modern;
+    }
+
+    public static Path resolveAdvancementsDir(Path worldDir) {
+        Path modern = worldDir.resolve("players").resolve("advancements");
+        if (Files.isDirectory(modern)) {
+            return modern;
+        }
+        Path legacy = worldDir.resolve("advancements");
+        if (Files.isDirectory(legacy)) {
+            return legacy;
+        }
+        return modern;
+    }
+
+    public static Path resolveStatsDir(Path worldDir) {
+        Path modern = worldDir.resolve("players").resolve("stats");
+        if (Files.isDirectory(modern)) {
+            return modern;
+        }
+        Path legacy = worldDir.resolve("stats");
+        if (Files.isDirectory(legacy)) {
+            return legacy;
+        }
+        return modern;
+    }
+
     public static UUID deterministicKeyUuid(byte[] encodedPublicKey) {
         String fingerprint = RoomKeys.hex(RoomKeys.sha256(encodedPublicKey));
         return UUID.nameUUIDFromBytes(("PeerPulsar:" + fingerprint).getBytes(StandardCharsets.UTF_8));
@@ -52,8 +92,9 @@ public final class PlayerDataMigrator {
         if (legacyUuid.equals(targetUuid)) {
             return false;
         }
-        Path targetDat = worldDir.resolve("playerdata").resolve(targetUuid + ".dat");
-        Path legacyDat = worldDir.resolve("playerdata").resolve(legacyUuid + ".dat");
+        Path playerDataDir = resolvePlayerDataDir(worldDir);
+        Path targetDat = playerDataDir.resolve(targetUuid + ".dat");
+        Path legacyDat = playerDataDir.resolve(legacyUuid + ".dat");
         return !Files.exists(targetDat) && Files.isRegularFile(legacyDat);
     }
 
@@ -83,7 +124,9 @@ public final class PlayerDataMigrator {
             return new MigrationResult(MigrationStatus.ALREADY_MIGRATED, legacyUuid, targetUuid, null, 0);
         }
 
-        Path playerDataDir = worldDir.resolve("playerdata");
+        Path playerDataDir = resolvePlayerDataDir(worldDir);
+        Path advancementsDir = resolveAdvancementsDir(worldDir);
+        Path statsDir = resolveStatsDir(worldDir);
         Path targetDat = playerDataDir.resolve(targetUuid + ".dat");
         if (Files.exists(targetDat)) {
             return new MigrationResult(MigrationStatus.ALREADY_EXISTS, legacyUuid, targetUuid, null, 0);
@@ -111,12 +154,12 @@ public final class PlayerDataMigrator {
                     playerDataDir.resolve(targetUuid + ".dat_old")
             );
             copied += copyIfAbsent(
-                    worldDir.resolve("advancements").resolve(legacyUuid + ".json"),
-                    worldDir.resolve("advancements").resolve(targetUuid + ".json")
+                    advancementsDir.resolve(legacyUuid + ".json"),
+                    advancementsDir.resolve(targetUuid + ".json")
             );
             copied += copyIfAbsent(
-                    worldDir.resolve("stats").resolve(legacyUuid + ".json"),
-                    worldDir.resolve("stats").resolve(targetUuid + ".json")
+                    statsDir.resolve(legacyUuid + ".json"),
+                    statsDir.resolve(targetUuid + ".json")
             );
 
             IdentityMapStore.upsert(worldDir, new IdentityMapStore.IdentityRecord(
@@ -151,7 +194,10 @@ public final class PlayerDataMigrator {
             return new TransferResult(false, "Source and target UUIDs are identical.", null, 0);
         }
 
-        Path sourceDat = worldDir.resolve("playerdata").resolve(fromUuid + ".dat");
+        Path playerDataDir = resolvePlayerDataDir(worldDir);
+        Path advancementsDir = resolveAdvancementsDir(worldDir);
+        Path statsDir = resolveStatsDir(worldDir);
+        Path sourceDat = playerDataDir.resolve(fromUuid + ".dat");
         if (!Files.isRegularFile(sourceDat)) {
             return new TransferResult(false, "No playerdata found for source UUID " + fromUuid, null, 0);
         }
@@ -162,18 +208,18 @@ public final class PlayerDataMigrator {
             backupUuidFiles(worldDir, toUuid, backupDir);
 
             int copied = 0;
-            copied += copyOverwrite(sourceDat, worldDir.resolve("playerdata").resolve(toUuid + ".dat"));
+            copied += copyOverwrite(sourceDat, playerDataDir.resolve(toUuid + ".dat"));
             copied += copyOverwrite(
-                    worldDir.resolve("playerdata").resolve(fromUuid + ".dat_old"),
-                    worldDir.resolve("playerdata").resolve(toUuid + ".dat_old")
+                    playerDataDir.resolve(fromUuid + ".dat_old"),
+                    playerDataDir.resolve(toUuid + ".dat_old")
             );
             copied += copyOverwrite(
-                    worldDir.resolve("advancements").resolve(fromUuid + ".json"),
-                    worldDir.resolve("advancements").resolve(toUuid + ".json")
+                    advancementsDir.resolve(fromUuid + ".json"),
+                    advancementsDir.resolve(toUuid + ".json")
             );
             copied += copyOverwrite(
-                    worldDir.resolve("stats").resolve(fromUuid + ".json"),
-                    worldDir.resolve("stats").resolve(toUuid + ".json")
+                    statsDir.resolve(fromUuid + ".json"),
+                    statsDir.resolve(toUuid + ".json")
             );
 
             PeerPulsar.LOGGER.info(
@@ -188,11 +234,14 @@ public final class PlayerDataMigrator {
     }
 
     private static int backupUuidFiles(Path worldDir, UUID uuid, Path backupDir) throws IOException {
+        Path playerDataDir = resolvePlayerDataDir(worldDir);
+        Path advancementsDir = resolveAdvancementsDir(worldDir);
+        Path statsDir = resolveStatsDir(worldDir);
         int count = 0;
-        count += backupFile(worldDir.resolve("playerdata").resolve(uuid + ".dat"), backupDir.resolve("playerdata").resolve(uuid + ".dat"));
-        count += backupFile(worldDir.resolve("playerdata").resolve(uuid + ".dat_old"), backupDir.resolve("playerdata").resolve(uuid + ".dat_old"));
-        count += backupFile(worldDir.resolve("advancements").resolve(uuid + ".json"), backupDir.resolve("advancements").resolve(uuid + ".json"));
-        count += backupFile(worldDir.resolve("stats").resolve(uuid + ".json"), backupDir.resolve("stats").resolve(uuid + ".json"));
+        count += backupFile(playerDataDir.resolve(uuid + ".dat"), backupDir.resolve("playerdata").resolve(uuid + ".dat"));
+        count += backupFile(playerDataDir.resolve(uuid + ".dat_old"), backupDir.resolve("playerdata").resolve(uuid + ".dat_old"));
+        count += backupFile(advancementsDir.resolve(uuid + ".json"), backupDir.resolve("advancements").resolve(uuid + ".json"));
+        count += backupFile(statsDir.resolve(uuid + ".json"), backupDir.resolve("stats").resolve(uuid + ".json"));
         return count;
     }
 

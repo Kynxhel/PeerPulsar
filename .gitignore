@@ -10,6 +10,7 @@ MODRINTH_CURSEFORGE.md
 # Minecraft run directory
 run/
 logs/
+launch-3-clients.bat
 
 # IDE files
 .idea/

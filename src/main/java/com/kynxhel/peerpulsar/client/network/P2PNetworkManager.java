@@ -11,6 +11,11 @@ import com.kynxhel.peerpulsar.security.OfflineAuth;
 import com.kynxhel.peerpulsar.security.RoomKeys;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.DisconnectedScreen;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
@@ -79,6 +84,10 @@ public class P2PNetworkManager {
     private volatile boolean joinApprovalEnabled = PeerPulsarConfig.get().isJoinApprovalEnabled();
     private final AtomicLong hostGeneration = new AtomicLong(0);
     private final AtomicBoolean suppressNextUdpClientStop = new AtomicBoolean(false);
+    private volatile ActiveUdpJoinInfo activeUdpJoinInfo = null;
+    private volatile boolean udpReconnecting = false;
+
+    public record ActiveUdpJoinInfo(String roomCode, String signalingServer, String roomKey) {}
 
     private P2PNetworkManager() {
         TunnelRelayService.getInstance().setUnexpectedDisconnectHandler(this::onTunnelDroppedUnexpectedly);
@@ -126,6 +135,19 @@ public class P2PNetworkManager {
             @Override
             public ExecutorService getAsyncExecutor() {
                 return NETWORK_IO_EXECUTOR;
+            }
+
+            @Override
+            public void onPreApprovedJoin(String playerName) {
+                Minecraft mc = Minecraft.getInstance();
+                if (mc != null && playerName != null) {
+                    mc.execute(() -> {
+                        if (mc.player != null) {
+                            mc.player.sendSystemMessage(Component.translatable(
+                                    "screen.peerpulsar.host.msg_preapproved_join", playerName));
+                        }
+                    });
+                }
             }
         });
     }
@@ -701,6 +723,74 @@ public class P2PNetworkManager {
         this.suppressNextUdpClientStop.set(true);
     }
 
+    public void setActiveUdpJoinInfo(ActiveUdpJoinInfo info) {
+        this.activeUdpJoinInfo = info;
+    }
+
+    public ActiveUdpJoinInfo getActiveUdpJoinInfo() {
+        return activeUdpJoinInfo;
+    }
+
+    public boolean isUdpReconnecting() {
+        return udpReconnecting;
+    }
+
+    /**
+     * Cleanly disconnects from the current UDP P2P world and reconnects using {@code targetEngine}
+     * with the saved room code and Room Key.
+     */
+    public void reconnectUdpWithTransport(UdpTransportMode targetEngine) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || targetEngine == null || !targetEngine.isConcrete()) return;
+        mc.execute(() -> {
+            ActiveUdpJoinInfo info = this.activeUdpJoinInfo;
+            if (this.udpReconnecting || info == null) {
+                if (mc.player != null) {
+                    mc.player.sendSystemMessage(Component.translatable("screen.peerpulsar.transport.cannot_reconnect"));
+                }
+                return;
+            }
+            this.udpReconnecting = true;
+            PeerPulsar.LOGGER.info("[P2P-UDP] Reconnecting with transport engine {}...", targetEngine.displayName());
+            UdpHolePunchService.getInstance().stopClientProxy();
+            suppressNextClientProxyDisconnectCleanup();
+            mc.disconnectFromWorld(Component.translatable("screen.peerpulsar.transport.reconnecting", targetEngine.displayName()));
+
+            UdpHolePunchService.getInstance()
+                    .startClientProxyAsync(info.roomCode(), info.signalingServer(), targetEngine)
+                    .whenComplete((res, err) -> mc.execute(() -> {
+                        this.udpReconnecting = false;
+                        if (err == null && res != null && res.success()) {
+                            this.activeUdpJoinInfo = info;
+                            setPendingJoinKey(info.roomKey());
+                            ServerData serverData = new ServerData(
+                                    "UDP P2P (" + info.roomCode() + ")",
+                                    "127.0.0.1:" + res.localPort(),
+                                    ServerData.Type.OTHER
+                            );
+                            ConnectScreen.startConnecting(
+                                    new TitleScreen(),
+                                    mc,
+                                    new ServerAddress("127.0.0.1", res.localPort()),
+                                    serverData,
+                                    false,
+                                    null
+                            );
+                        } else {
+                            this.activeUdpJoinInfo = null;
+                            String reason = (res != null && res.error() != null)
+                                    ? res.error()
+                                    : (err != null && err.getMessage() != null ? err.getMessage() : "Reconnect failed");
+                            mc.setScreenAndShow(new DisconnectedScreen(
+                                    new TitleScreen(),
+                                    Component.translatable("screen.peerpulsar.transport.reconnect_failed_title"),
+                                    Component.literal(reason)
+                            ));
+                        }
+                    }));
+        });
+    }
+
     /**
      * Unpublishes IntegratedServer, closes UPnP mappings and resets active P2P state.
      */
@@ -756,6 +846,9 @@ public class P2PNetworkManager {
     public void onWorldDisconnect() {
         if (!suppressNextUdpClientStop.getAndSet(false)) {
             UdpHolePunchService.getInstance().stopClientProxy();
+        }
+        if (!this.udpReconnecting) {
+            this.activeUdpJoinInfo = null;
         }
         boolean wasActiveOrStarting;
         synchronized (this) {

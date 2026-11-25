@@ -315,6 +315,9 @@ public class P2PJoinScreen extends Screen {
                         return;
                     }
                     if (res.success()) {
+                        P2PNetworkManager.getInstance().setActiveUdpJoinInfo(
+                                new P2PNetworkManager.ActiveUdpJoinInfo(target.host(), target.signalingServer(), target.roomKey())
+                        );
                         P2PNetworkManager.getInstance().setPendingJoinKey(target.roomKey());
                         ServerData serverData = new ServerData(
                                 "UDP P2P (" + target.host() + ")",
@@ -463,11 +466,13 @@ public class P2PJoinScreen extends Screen {
             } else if (currentTarget.hasRoomKey()) {
                 hintLabel = tr(currentTarget.isUdpHolePunch()
                         ? "screen.peerpulsar.join.resolved_udp_key_hint"
-                        : "screen.peerpulsar.join.resolved_key_hint");
+                        : "screen.peerpulsar.join.resolved_key_hint",
+                        PeerPulsarConfig.get().getUdpTransportModeEnum().displayName());
             } else {
                 hintLabel = tr(currentTarget.isUdpHolePunch()
                         ? "screen.peerpulsar.join.resolved_udp_hint"
-                        : "screen.peerpulsar.join.resolved_hint");
+                        : "screen.peerpulsar.join.resolved_hint",
+                        PeerPulsarConfig.get().getUdpTransportModeEnum().displayName());
             }
             graphics.text(this.font, truncatePlain(targetLabel, maxTeleW),
                     panelLeft + 20, teleY + 8, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);

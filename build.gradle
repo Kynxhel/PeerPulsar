@@ -22,6 +22,12 @@ dependencies {
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
+    implementation "tech.kwik:kwik:0.12.2"
+    include "tech.kwik:kwik:0.12.2"
+    include "tech.kwik:agent15:4.0"
+    include "at.favre.lib:hkdf:2.0.0"
+    include "com.io7m.repackage.io.whitfin:io.whitfin.siphash:2.0.1"
+
     testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
@@ -51,6 +57,29 @@ java {
     withSourcesJar()
     sourceCompatibility = JavaVersion.VERSION_25
     targetCompatibility = JavaVersion.VERSION_25
+}
+
+loom {
+    runs {
+        host {
+            client()
+            runDir = "run/host"
+            programArgs "--username", "Host"
+            vmArg "-Dpeerpulsar.windowTitle=[HOST]"
+        }
+        deneme1 {
+            client()
+            runDir = "run/deneme1"
+            programArgs "--username", "deneme1"
+            vmArg "-Dpeerpulsar.windowTitle=[deneme1]"
+        }
+        deneme2 {
+            client()
+            runDir = "run/deneme2"
+            programArgs "--username", "deneme2"
+            vmArg "-Dpeerpulsar.windowTitle=[deneme2]"
+        }
+    }
 }
 
 jar {

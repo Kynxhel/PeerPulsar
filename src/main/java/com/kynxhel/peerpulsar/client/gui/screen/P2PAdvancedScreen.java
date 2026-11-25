@@ -1,5 +1,6 @@
 package com.kynxhel.peerpulsar.client.gui.screen;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import com.kynxhel.peerpulsar.client.gui.fx.NeonRenderUtils;
 import com.kynxhel.peerpulsar.client.gui.fx.NeonTheme;
 import com.kynxhel.peerpulsar.client.gui.fx.ParticleBackground;
@@ -7,6 +8,8 @@ import com.kynxhel.peerpulsar.client.gui.widget.NeonButton;
 import com.kynxhel.peerpulsar.client.gui.widget.NeonToggleCard;
 import com.kynxhel.peerpulsar.client.network.NetworkEndpoints;
 import com.kynxhel.peerpulsar.client.network.P2PNetworkManager;
+import com.kynxhel.peerpulsar.client.network.UdpHolePunchService;
+import com.kynxhel.peerpulsar.client.network.UdpTransportMode;
 import com.kynxhel.peerpulsar.config.PeerPulsarConfig;
 import com.kynxhel.peerpulsar.security.ApprovedPlayerStore;
 import com.kynxhel.peerpulsar.security.ClientIdentity;
@@ -20,8 +23,11 @@ import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.level.storage.LevelResource;
 
 import java.nio.file.Files;
@@ -53,14 +59,15 @@ public class P2PAdvancedScreen extends Screen {
     public enum NetworkSection {
         RELAY,
         SIGNALING,
-        STUN_IP
+        STUN_IP,
+        UDP_ENGINE
     }
 
     private record ListItem(String label, String endpoint, boolean isCustom, boolean isAuto, boolean isIpEcho) {}
 
     private record PlayerRow(String name, String keyFingerprint, String effectiveUuid, long lastSeenMs, boolean approved) {}
 
-    private record TransferCandidate(UUID uuid, String label) {}
+    private record TransferCandidate(UUID uuid, String name, String tag, long lastModifiedMs) {}
 
     private final Screen parent;
     private final ParticleBackground particleBg = new ParticleBackground();
@@ -77,7 +84,9 @@ public class P2PAdvancedScreen extends Screen {
     private NeonButton secRelayBtn;
     private NeonButton secSignalBtn;
     private NeonButton secStunBtn;
+    private NeonButton secUdpEngineBtn;
     private NeonButton testAllBtn;
+    private NeonToggleCard autoSwitchHintCard;
 
     private EditBox customInput;
     private NeonButton customTestBtn;
@@ -96,7 +105,7 @@ public class P2PAdvancedScreen extends Screen {
 
     private int networkScroll = 0;
     private int playersScroll = 0;
-    private PlayerRow transferTargetRow = null;
+    private PlayerRow transferSourceRow = null;
     private List<TransferCandidate> transferCandidates = List.of();
 
     private String toastMessage = null;
@@ -177,10 +186,10 @@ public class P2PAdvancedScreen extends Screen {
 
     private void initNetworkTab() {
         int secY = bodyY + 8;
-        int testW = 66;
+        int testW = 58;
         int availW = panelW - 16 - testW - 6;
         int secGap = 4;
-        int secW = (availW - secGap * 2) / 3;
+        int secW = (availW - secGap * 3) / 4;
 
         this.secRelayBtn = new NeonButton(panelLeft + 8, secY, secW, 18,
                 Component.translatable("screen.peerpulsar.advanced.sec_relay"),
@@ -191,13 +200,43 @@ public class P2PAdvancedScreen extends Screen {
         this.secStunBtn = new NeonButton(panelLeft + 8 + (secW + secGap) * 2, secY, secW, 18,
                 Component.translatable("screen.peerpulsar.advanced.sec_stun"),
                 NeonTheme.EMERALD, () -> switchSection(NetworkSection.STUN_IP));
-        this.testAllBtn = new NeonButton(panelLeft + panelW - 8 - testW, secY, testW, 18,
-                Component.translatable("screen.peerpulsar.advanced.btn_test_all"),
-                NeonTheme.AMBER, () -> withNetworkConsent(this::runTestAllInSection));
+        this.secUdpEngineBtn = new NeonButton(panelLeft + 8 + (secW + secGap) * 3, secY, secW, 18,
+                Component.translatable("screen.peerpulsar.advanced.sec_udp_engine"),
+                NeonTheme.AMBER, () -> switchSection(NetworkSection.UDP_ENGINE));
 
         this.addRenderableWidget(secRelayBtn);
         this.addRenderableWidget(secSignalBtn);
         this.addRenderableWidget(secStunBtn);
+        this.addRenderableWidget(secUdpEngineBtn);
+
+        if (activeSection == NetworkSection.UDP_ENGINE) {
+            this.testAllBtn = null;
+            this.customInput = null;
+            this.customTestBtn = null;
+            this.customAddBtn = null;
+
+            PeerPulsarConfig cfg = PeerPulsarConfig.get();
+            int listY = bodyY + 32;
+            int cardY = listY + 108;
+            this.autoSwitchHintCard = new NeonToggleCard(
+                    panelLeft + 8, cardY, panelW - 16, 28,
+                    tr("screen.peerpulsar.advanced.udp_auto_hint_title"),
+                    () -> cfg.isAutoTransportRecommendations()
+                            ? tr("screen.peerpulsar.advanced.udp_auto_hint_on")
+                            : tr("screen.peerpulsar.advanced.udp_auto_hint_off"),
+                    cfg::isAutoTransportRecommendations,
+                    () -> cfg.isAutoTransportRecommendations() ? NeonTheme.EMERALD : NeonTheme.SLATE,
+                    () -> cfg.setAutoTransportRecommendations(!cfg.isAutoTransportRecommendations())
+            );
+            this.addRenderableWidget(autoSwitchHintCard);
+            syncSectionButtons();
+            return;
+        }
+
+        this.autoSwitchHintCard = null;
+        this.testAllBtn = new NeonButton(panelLeft + panelW - 8 - testW, secY, testW, 18,
+                Component.translatable("screen.peerpulsar.advanced.btn_test_all"),
+                NeonTheme.AMBER, () -> withNetworkConsent(this::runTestAllInSection));
         this.addRenderableWidget(testAllBtn);
 
         int inputY = bodyY + bodyH - 34;
@@ -330,7 +369,7 @@ public class P2PAdvancedScreen extends Screen {
     private void switchTab(Tab tab) {
         if (this.activeTab == tab) return;
         this.activeTab = tab;
-        this.transferTargetRow = null;
+        this.transferSourceRow = null;
         this.init();
     }
 
@@ -353,6 +392,7 @@ public class P2PAdvancedScreen extends Screen {
         if (secRelayBtn != null) secRelayBtn.setPulsingBeacon(activeSection == NetworkSection.RELAY);
         if (secSignalBtn != null) secSignalBtn.setPulsingBeacon(activeSection == NetworkSection.SIGNALING);
         if (secStunBtn != null) secStunBtn.setPulsingBeacon(activeSection == NetworkSection.STUN_IP);
+        if (secUdpEngineBtn != null) secUdpEngineBtn.setPulsingBeacon(activeSection == NetworkSection.UDP_ENGINE);
     }
 
     private void withNetworkConsent(Runnable action) {
@@ -382,6 +422,10 @@ public class P2PAdvancedScreen extends Screen {
     }
 
     private void validateCustomInput(String raw) {
+        if (activeSection == NetworkSection.UDP_ENGINE) {
+            this.customValidationError = null;
+            return;
+        }
         if (raw == null || raw.isBlank()) {
             this.customValidationError = null;
             if (customAddBtn != null) customAddBtn.active = false;
@@ -392,12 +436,14 @@ public class P2PAdvancedScreen extends Screen {
             case RELAY -> NetworkEndpoints.isValidPublicHostPort(raw);
             case SIGNALING -> NetworkEndpoints.normalizePublicHttpsUrl(raw) != null;
             case STUN_IP -> NetworkEndpoints.isValidPublicHostPort(raw) || NetworkEndpoints.normalizePublicHttpsUrl(raw) != null;
+            case UDP_ENGINE -> false;
         };
         if (!valid) {
             this.customValidationError = switch (activeSection) {
                 case RELAY -> tr("screen.peerpulsar.advanced.err_hostport");
                 case SIGNALING -> tr("screen.peerpulsar.advanced.err_https");
                 case STUN_IP -> tr("screen.peerpulsar.advanced.err_stun_or_ip");
+                case UDP_ENGINE -> null;
             };
         } else {
             this.customValidationError = null;
@@ -495,6 +541,7 @@ public class P2PAdvancedScreen extends Screen {
             case STUN_IP -> NetworkEndpoints.isValidHttpsUrl(endpoint)
                     ? NetworkEndpoints.pingIpEchoAsync(endpoint)
                     : NetworkEndpoints.pingStunAsync(endpoint);
+            case UDP_ENGINE -> CompletableFuture.completedFuture(-1L);
         };
     }
 
@@ -623,39 +670,147 @@ public class P2PAdvancedScreen extends Screen {
         return new ArrayList<>(byFp.values());
     }
 
-    private List<TransferCandidate> loadTransferCandidates(UUID targetUuid) {
+    private List<TransferCandidate> loadTransferCandidates(UUID sourceUuid) {
         Path worldDir = currentWorldDir();
         if (worldDir == null) return List.of();
-        Path playerData = worldDir.resolve("playerdata");
-        if (!Files.isDirectory(playerData)) return List.of();
 
-        Map<UUID, String> nameHints = new LinkedHashMap<>();
-        for (IdentityMapStore.IdentityRecord r : IdentityMapStore.list(worldDir)) {
+        UUID hostUuid = null;
+        if (this.minecraft != null && this.minecraft.getSingleplayerServer() != null
+                && this.minecraft.getSingleplayerServer().getSingleplayerProfile() != null) {
+            hostUuid = this.minecraft.getSingleplayerServer().getSingleplayerProfile().id();
+        }
+        final UUID excludedHostUuid = hostUuid;
+
+        Map<UUID, TransferCandidate> byUuid = new LinkedHashMap<>();
+
+        // 1. Include all known/approved players in this world (even if they just joined and haven't saved a .dat yet)
+        for (PlayerRow row : loadPlayerRows()) {
+            if (row.effectiveUuid() == null) continue;
             try {
-                if (r.effectiveUuid() != null && r.lastName() != null) {
-                    nameHints.put(UUID.fromString(r.effectiveUuid()), r.lastName() + " (key)");
-                }
-                if (r.migratedFromUuid() != null && r.lastName() != null) {
-                    nameHints.putIfAbsent(UUID.fromString(r.migratedFromUuid()), r.lastName() + " (legacy)");
-                }
+                UUID u = UUID.fromString(row.effectiveUuid());
+                if (u.equals(sourceUuid) || (excludedHostUuid != null && u.equals(excludedHostUuid))) continue;
+                byUuid.put(u, new TransferCandidate(u, row.name(), "key", row.lastSeenMs()));
             } catch (Exception ignored) {}
         }
 
-        List<TransferCandidate> list = new ArrayList<>();
-        try (Stream<Path> stream = Files.list(playerData)) {
-            stream.filter(p -> p.getFileName().toString().endsWith(".dat"))
-                    .forEach(p -> {
-                        String fn = p.getFileName().toString();
-                        String uuidStr = fn.substring(0, fn.length() - 4);
-                        try {
-                            UUID u = UUID.fromString(uuidStr);
-                            if (u.equals(targetUuid)) return;
-                            String label = nameHints.getOrDefault(u, "UUID " + uuidStr.substring(0, 8) + "...");
-                            list.add(new TransferCandidate(u, label));
-                        } catch (Exception ignored) {}
-                    });
-        } catch (Exception ignored) {}
+        // 2. Include any other saved playerdata/*.dat files on disk (excluding source and host)
+        Path playerData = PlayerDataMigrator.resolvePlayerDataDir(worldDir);
+        if (Files.isDirectory(playerData)) {
+            Map<UUID, String[]> legacyHints = new LinkedHashMap<>();
+            for (IdentityMapStore.IdentityRecord r : IdentityMapStore.list(worldDir)) {
+                try {
+                    if (r.migratedFromUuid() != null && r.lastName() != null) {
+                        legacyHints.putIfAbsent(UUID.fromString(r.migratedFromUuid()), new String[]{r.lastName(), "legacy"});
+                    }
+                } catch (Exception ignored) {}
+            }
+            try (Stream<Path> stream = Files.list(playerData)) {
+                stream.filter(p -> p.getFileName().toString().endsWith(".dat"))
+                        .forEach(p -> {
+                            String fn = p.getFileName().toString();
+                            String uuidStr = fn.substring(0, fn.length() - 4);
+                            try {
+                                UUID u = UUID.fromString(uuidStr);
+                                if (u.equals(sourceUuid) || (excludedHostUuid != null && u.equals(excludedHostUuid))) {
+                                    return;
+                                }
+                                long modMs = 0L;
+                                try {
+                                    modMs = Files.getLastModifiedTime(p).toMillis();
+                                } catch (Exception ignored2) {}
+                                if (byUuid.containsKey(u)) {
+                                    TransferCandidate prev = byUuid.get(u);
+                                    if (modMs > prev.lastModifiedMs()) {
+                                        byUuid.put(u, new TransferCandidate(u, prev.name(), prev.tag(), modMs));
+                                    }
+                                    return;
+                                }
+                                String[] hint = legacyHints.get(u);
+                                String name = hint != null ? hint[0] : ("UUID " + uuidStr.substring(0, 8) + "...");
+                                String tag = hint != null ? hint[1] : "unknown";
+                                byUuid.put(u, new TransferCandidate(u, name, tag, modMs));
+                            } catch (Exception ignored) {}
+                        });
+            } catch (Exception ignored) {}
+        }
+
+        List<TransferCandidate> list = new ArrayList<>(byUuid.values());
+        list.sort((a, b) -> Long.compare(b.lastModifiedMs(), a.lastModifiedMs()));
         return list;
+    }
+
+    private void playClickSound() {
+        if (this.minecraft != null) {
+            this.minecraft.getSoundManager().play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK, 1.0f));
+        }
+    }
+
+    private void executeTransferAsync(Path worldDir, PlayerRow sourceRow, TransferCandidate target) {
+        if (this.minecraft == null || this.minecraft.getSingleplayerServer() == null) return;
+        final IntegratedServer server = this.minecraft.getSingleplayerServer();
+        final UUID srcUuid;
+        try {
+            srcUuid = UUID.fromString(sourceRow.effectiveUuid());
+        } catch (Exception e) {
+            showToast("⚠ " + e.getMessage(), NeonTheme.CRIMSON);
+            return;
+        }
+        final UUID dstUuid = target.uuid();
+
+        showToast(tr("screen.peerpulsar.advanced.toast_transferring", sourceRow.name(), target.name()), NeonTheme.CYAN);
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                // 1. Flush all online players (including source) to disk and disconnect target if online
+                CompletableFuture<Boolean> prepFuture = new CompletableFuture<>();
+                server.execute(() -> {
+                    try {
+                        server.getPlayerList().saveAll();
+                        ServerPlayer dstPlayer = server.getPlayerList().getPlayer(dstUuid);
+                        boolean wasOnline = dstPlayer != null;
+                        if (dstPlayer != null) {
+                            dstPlayer.connection.disconnect(Component.translatable("screen.peerpulsar.advanced.transfer_rejoin_kick"));
+                        }
+                        prepFuture.complete(wasOnline);
+                    } catch (Throwable t) {
+                        prepFuture.completeExceptionally(t);
+                    }
+                });
+                boolean targetWasOnline = prepFuture.get(5, java.util.concurrent.TimeUnit.SECONDS);
+
+                // 2. If target was online, wait until Minecraft finishes removing & saving their old data
+                if (targetWasOnline) {
+                    long deadline = System.currentTimeMillis() + 3000L;
+                    while (System.currentTimeMillis() < deadline) {
+                        CompletableFuture<Boolean> stillOnline = new CompletableFuture<>();
+                        server.execute(() -> stillOnline.complete(server.getPlayerList().getPlayer(dstUuid) != null));
+                        if (!stillOnline.get(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                            break;
+                        }
+                        Thread.sleep(50L);
+                    }
+                }
+
+                // 3. Perform the backup-first file copy on the server thread so no concurrent save races it
+                CompletableFuture<PlayerDataMigrator.TransferResult> copyFuture = new CompletableFuture<>();
+                server.execute(() -> {
+                    try {
+                        copyFuture.complete(PlayerDataMigrator.transferPlayerData(worldDir, srcUuid, dstUuid));
+                    } catch (Throwable t) {
+                        copyFuture.completeExceptionally(t);
+                    }
+                });
+                PlayerDataMigrator.TransferResult res = copyFuture.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                runOnClient(() -> showToast(
+                        res.success()
+                                ? tr("screen.peerpulsar.advanced.toast_transferred_named", sourceRow.name(), target.name())
+                                : res.message(),
+                        res.success() ? NeonTheme.EMERALD : NeonTheme.CRIMSON
+                ));
+            } catch (Exception e) {
+                runOnClient(() -> showToast("⚠ " + e.getMessage(), NeonTheme.CRIMSON));
+            }
+        }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
     }
 
     private void exportIdentity() {
@@ -752,6 +907,10 @@ public class P2PAdvancedScreen extends Screen {
     }
 
     private void renderNetworkTab(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+        if (activeSection == NetworkSection.UDP_ENGINE) {
+            renderUdpEngineSection(graphics, mouseX, mouseY);
+            return;
+        }
         int listX = panelLeft + 8;
         int listW = panelW - 16;
         int listY = bodyY + 32;
@@ -841,6 +1000,82 @@ public class P2PAdvancedScreen extends Screen {
         }
     }
 
+    private void renderUdpEngineSection(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
+        int listX = panelLeft + 8;
+        int listW = panelW - 16;
+        int listY = bodyY + 32;
+        int rowH = 26;
+        UdpTransportMode[] modes = UdpTransportMode.values();
+        int boxH = rowH * modes.length;
+
+        graphics.fill(listX, listY, listX + listW, listY + boxH, 0x88070B16);
+        graphics.outline(listX, listY, listW, boxH, NeonTheme.withAlpha(NeonTheme.SLATE, 70));
+
+        UdpTransportMode selectedMode = PeerPulsarConfig.get().getUdpTransportModeEnum();
+        for (int i = 0; i < modes.length; i++) {
+            UdpTransportMode mode = modes[i];
+            int ry = listY + i * rowH;
+            boolean selected = (selectedMode == mode);
+            boolean hovered = mouseX >= listX && mouseX <= listX + listW && mouseY >= ry && mouseY < ry + rowH;
+            int accent = switch (mode) {
+                case AUTO -> NeonTheme.CYAN;
+                case RUDP -> NeonTheme.EMERALD;
+                case KCP -> NeonTheme.AMBER;
+                case QUIC -> NeonTheme.VIOLET;
+            };
+
+            if (selected) {
+                graphics.fill(listX + 1, ry + 1, listX + listW - 1, ry + rowH - 1, NeonTheme.withAlpha(accent, 42));
+            } else if (hovered) {
+                graphics.fill(listX + 1, ry + 1, listX + listW - 1, ry + rowH - 1, 0x28FFFFFF);
+            }
+
+            int rx = listX + 8;
+            int rcy = ry + rowH / 2;
+            graphics.outline(rx, rcy - 4, 8, 8, NeonTheme.withAlpha(selected ? accent : NeonTheme.SLATE, 220));
+            if (selected) {
+                graphics.fill(rx + 2, rcy - 2, rx + 6, rcy + 2, NeonTheme.withAlpha(accent, 255));
+            }
+
+            String titleKey = switch (mode) {
+                case AUTO -> "screen.peerpulsar.advanced.udp_engine_auto_title";
+                case RUDP -> "screen.peerpulsar.advanced.udp_engine_rudp_title";
+                case KCP -> "screen.peerpulsar.advanced.udp_engine_kcp_title";
+                case QUIC -> "screen.peerpulsar.advanced.udp_engine_quic_title";
+            };
+            String descKey = switch (mode) {
+                case AUTO -> "screen.peerpulsar.advanced.udp_engine_auto_desc";
+                case RUDP -> "screen.peerpulsar.advanced.udp_engine_rudp_desc";
+                case KCP -> "screen.peerpulsar.advanced.udp_engine_kcp_desc";
+                case QUIC -> "screen.peerpulsar.advanced.udp_engine_quic_desc";
+            };
+            graphics.text(this.font, tr(titleKey), listX + 22, ry + 4,
+                    selected ? NeonTheme.withAlpha(accent, 255) : NeonTheme.TEXT_PRIMARY, selected);
+            String desc = tr(descKey);
+            int maxDescW = Math.max(40, listW - 30);
+            if (this.font.width(desc) > maxDescW) {
+                desc = this.font.plainSubstrByWidth(desc, maxDescW - 8) + "...";
+            }
+            graphics.text(this.font, desc, listX + 22, ry + 15, NeonTheme.TEXT_SECONDARY, false);
+        }
+
+        int footerY = listY + boxH + 40;
+        UdpHolePunchService.TransportTelemetry tele = UdpHolePunchService.getInstance().getClientTransportTelemetry();
+        String footerText;
+        int footerColor;
+        if (tele != null) {
+            String rttStr = tele.rttMs() > 0 ? (Math.round(tele.rttMs()) + " ms") : "--";
+            footerText = tr("screen.peerpulsar.advanced.udp_live_telemetry",
+                    tele.activeEngine().displayName(), rttStr, Math.round(tele.jitterMs()),
+                    String.format("%.1f", tele.lossPct()));
+            footerColor = NeonTheme.withAlpha(NeonTheme.CYAN, 255);
+        } else {
+            footerText = tr("screen.peerpulsar.advanced.udp_live_idle");
+            footerColor = NeonTheme.TEXT_MUTED;
+        }
+        graphics.text(this.font, this.font.plainSubstrByWidth(footerText, listW), listX + 2, footerY, footerColor, false);
+    }
+
     private void renderSecurityTab(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         int listX = panelLeft + 8;
         int listW = panelW - 16;
@@ -850,24 +1085,52 @@ public class P2PAdvancedScreen extends Screen {
         graphics.fill(listX, listY, listX + listW, listY + listH, 0x88070B16);
         graphics.outline(listX, listY, listW, listH, NeonTheme.withAlpha(NeonTheme.SLATE, 70));
 
-        if (transferTargetRow != null) {
-            graphics.text(this.font, tr("screen.peerpulsar.advanced.transfer_pick", transferTargetRow.name()),
+        if (transferSourceRow != null) {
+            graphics.text(this.font, tr("screen.peerpulsar.advanced.transfer_pick", transferSourceRow.name()),
                     listX + 8, listY + 6, NeonTheme.withAlpha(NeonTheme.AMBER, 255), true);
             int cancelX = listX + listW - 54;
-            graphics.fill(cancelX, listY + 4, cancelX + 48, listY + 16, NeonTheme.withAlpha(NeonTheme.SLATE, 85));
+            boolean cancelHov = mouseX >= cancelX && mouseX <= cancelX + 48 && mouseY >= listY + 4 && mouseY <= listY + 16;
+            graphics.fill(cancelX, listY + 4, cancelX + 48, listY + 16, NeonTheme.withAlpha(NeonTheme.SLATE, cancelHov ? 145 : 75));
+            graphics.outline(cancelX, listY + 4, 48, 12, NeonTheme.withAlpha(NeonTheme.SLATE, cancelHov ? 255 : 165));
             graphics.centeredText(this.font, tr("gui.cancel"), cancelX + 24, listY + 6, NeonTheme.TEXT_PRIMARY);
 
-            int rowY = listY + 22;
+            String hint = this.font.plainSubstrByWidth(tr("screen.peerpulsar.advanced.transfer_hint", transferSourceRow.name()), listW - 16);
+            graphics.text(this.font, hint, listX + 8, listY + 19, NeonTheme.TEXT_SECONDARY, false);
+
+            int rowY = listY + 32;
             if (transferCandidates.isEmpty()) {
                 graphics.text(this.font, tr("screen.peerpulsar.advanced.transfer_none"),
                         listX + 8, rowY + 6, NeonTheme.TEXT_MUTED, false);
             } else {
-                for (int i = 0; i < transferCandidates.size() && rowY + 16 <= listY + listH - 4; i++) {
+                SimpleDateFormat timeFmt = new SimpleDateFormat("MM-dd HH:mm");
+                for (int i = 0; i < transferCandidates.size() && rowY + 18 <= listY + listH - 4; i++) {
                     TransferCandidate cand = transferCandidates.get(i);
-                    boolean hov = mouseX >= listX + 6 && mouseX <= listX + listW - 6 && mouseY >= rowY && mouseY < rowY + 16;
-                    graphics.fill(listX + 6, rowY, listX + listW - 6, rowY + 15, NeonTheme.withAlpha(NeonTheme.CYAN, hov ? 65 : 22));
-                    graphics.text(this.font, cand.label(), listX + 10, rowY + 4, NeonTheme.TEXT_PRIMARY, false);
-                    rowY += 17;
+                    boolean hov = mouseX >= listX + 6 && mouseX <= listX + listW - 6 && mouseY >= rowY && mouseY < rowY + 18;
+                    graphics.fill(listX + 6, rowY, listX + listW - 6, rowY + 17,
+                            NeonTheme.withAlpha(NeonTheme.CYAN, hov ? 68 : 24));
+                    graphics.outline(listX + 6, rowY, listW - 12, 17,
+                            NeonTheme.withAlpha(hov ? NeonTheme.EMERALD : NeonTheme.CYAN, hov ? 225 : 85));
+
+                    String copyText = tr("screen.peerpulsar.advanced.transfer_copy_btn");
+                    int pillW = Math.max(48, this.font.width(copyText) + 10);
+                    int pillX = listX + listW - 10 - pillW;
+                    graphics.fill(pillX, rowY + 2, pillX + pillW, rowY + 15,
+                            NeonTheme.withAlpha(NeonTheme.EMERALD, hov ? 145 : 55));
+                    graphics.outline(pillX, rowY + 2, pillW, 13,
+                            NeonTheme.withAlpha(NeonTheme.EMERALD, hov ? 255 : 155));
+                    graphics.centeredText(this.font, copyText, pillX + pillW / 2, rowY + 5, NeonTheme.TEXT_PRIMARY);
+
+                    String tagLabel = "legacy".equals(cand.tag())
+                            ? tr("screen.peerpulsar.advanced.transfer_tag_legacy")
+                            : tr("screen.peerpulsar.advanced.transfer_tag_saved");
+                    String timeStr = cand.lastModifiedMs() > 0 ? (" • " + timeFmt.format(new Date(cand.lastModifiedMs()))) : "";
+                    String leftText = cand.name() + "  (" + tagLabel + timeStr + ")";
+                    int maxLeftW = Math.max(40, pillX - (listX + 14));
+                    if (this.font.width(leftText) > maxLeftW) {
+                        leftText = this.font.plainSubstrByWidth(leftText, maxLeftW - 8) + "...";
+                    }
+                    graphics.text(this.font, leftText, listX + 11, rowY + 5, NeonTheme.TEXT_PRIMARY, hov);
+                    rowY += 20;
                 }
             }
             return;
@@ -903,15 +1166,17 @@ public class P2PAdvancedScreen extends Screen {
             String dateStr = row.lastSeenMs() > 0 ? fmt.format(new Date(row.lastSeenMs())) : "--";
 
             int remX = listX + listW - 50;
-            int trX = remX - 54;
-            boolean trHov = row.effectiveUuid() != null && mouseX >= trX && mouseX <= trX + 50 && mouseY >= ry + 1 && mouseY < ry + 16;
+            int trX = remX - 60;
+            boolean trHov = row.effectiveUuid() != null && mouseX >= trX && mouseX <= trX + 56 && mouseY >= ry + 1 && mouseY < ry + 16;
             boolean remHov = mouseX >= remX && mouseX <= remX + 44 && mouseY >= ry + 1 && mouseY < ry + 16;
 
             if (row.effectiveUuid() != null) {
-                graphics.fill(trX, ry + 1, trX + 50, ry + 16, NeonTheme.withAlpha(NeonTheme.CYAN, trHov ? 110 : 40));
-                graphics.centeredText(this.font, tr("screen.peerpulsar.advanced.btn_transfer"), trX + 25, ry + 5, NeonTheme.TEXT_PRIMARY);
+                graphics.fill(trX, ry + 1, trX + 56, ry + 16, NeonTheme.withAlpha(NeonTheme.CYAN, trHov ? 115 : 42));
+                graphics.outline(trX, ry + 1, 56, 15, NeonTheme.withAlpha(NeonTheme.CYAN, trHov ? 255 : 140));
+                graphics.centeredText(this.font, tr("screen.peerpulsar.advanced.btn_transfer"), trX + 28, ry + 5, NeonTheme.TEXT_PRIMARY);
             }
-            graphics.fill(remX, ry + 1, remX + 44, ry + 16, NeonTheme.withAlpha(NeonTheme.CRIMSON, remHov ? 120 : 45));
+            graphics.fill(remX, ry + 1, remX + 44, ry + 16, NeonTheme.withAlpha(NeonTheme.CRIMSON, remHov ? 125 : 45));
+            graphics.outline(remX, ry + 1, 44, 15, NeonTheme.withAlpha(NeonTheme.CRIMSON, remHov ? 255 : 140));
             graphics.centeredText(this.font, tr("screen.peerpulsar.advanced.btn_remove"), remX + 22, ry + 5, NeonTheme.TEXT_PRIMARY);
 
             String label = row.name() + " • " + shortFp + " • " + dateStr + (row.approved() ? "" : " (known)");
@@ -958,7 +1223,7 @@ public class P2PAdvancedScreen extends Screen {
         if (super.mouseClicked(event, doubleClick)) {
             return true;
         }
-        if (event.button() != 0) return false;
+        if (event.button() != InputConstants.MOUSE_BUTTON_LEFT) return false;
         double mx = event.x();
         double my = event.y();
 
@@ -975,6 +1240,22 @@ public class P2PAdvancedScreen extends Screen {
         int listX = panelLeft + 8;
         int listW = panelW - 16;
         int listY = bodyY + 32;
+        if (activeSection == NetworkSection.UDP_ENGINE) {
+            int rowH = 26;
+            UdpTransportMode[] modes = UdpTransportMode.values();
+            int boxH = rowH * modes.length;
+            if (mx < listX || mx > listX + listW || my < listY || my >= listY + boxH) {
+                return false;
+            }
+            int idx = (int) ((my - listY) / rowH);
+            if (idx >= 0 && idx < modes.length) {
+                playClickSound();
+                PeerPulsarConfig.get().setUdpTransportMode(modes[idx]);
+                showToast(tr("screen.peerpulsar.advanced.udp_engine_saved", modes[idx].displayName()), NeonTheme.CYAN);
+                return true;
+            }
+            return false;
+        }
         int noteReserve = activeSection == NetworkSection.RELAY ? 14 : 0;
         int listH = Math.max(46, bodyH - 72 - noteReserve);
         if (mx < listX || mx > listX + listW || my < listY || my > listY + listH) {
@@ -1009,28 +1290,24 @@ public class P2PAdvancedScreen extends Screen {
             return false;
         }
 
-        if (transferTargetRow != null) {
+        if (transferSourceRow != null) {
             int cancelX = listX + listW - 54;
             if (mx >= cancelX && mx <= cancelX + 48 && my >= listY + 4 && my <= listY + 16) {
-                transferTargetRow = null;
+                playClickSound();
+                transferSourceRow = null;
                 return true;
             }
-            int rowY = listY + 22;
-            for (int i = 0; i < transferCandidates.size() && rowY + 16 <= listY + listH - 4; i++) {
-                if (my >= rowY && my < rowY + 16) {
-                    TransferCandidate cand = transferCandidates.get(i);
-                    try {
-                        UUID dst = UUID.fromString(transferTargetRow.effectiveUuid());
-                        PlayerDataMigrator.TransferResult res = PlayerDataMigrator.transferPlayerData(worldDir, cand.uuid(), dst);
-                        showToast(res.success() ? tr("screen.peerpulsar.advanced.toast_transferred") : res.message(),
-                                res.success() ? NeonTheme.EMERALD : NeonTheme.CRIMSON);
-                    } catch (Exception e) {
-                        showToast("⚠ " + e.getMessage(), NeonTheme.CRIMSON);
-                    }
-                    transferTargetRow = null;
+            int rowY = listY + 32;
+            for (int i = 0; i < transferCandidates.size() && rowY + 18 <= listY + listH - 4; i++) {
+                if (my >= rowY && my < rowY + 18) {
+                    playClickSound();
+                    TransferCandidate target = transferCandidates.get(i);
+                    PlayerRow source = transferSourceRow;
+                    transferSourceRow = null;
+                    executeTransferAsync(worldDir, source, target);
                     return true;
                 }
-                rowY += 17;
+                rowY += 20;
             }
             return false;
         }
@@ -1043,16 +1320,20 @@ public class P2PAdvancedScreen extends Screen {
 
         PlayerRow row = rows.get(idx);
         int remX = listX + listW - 50;
-        int trX = remX - 54;
-        if (row.effectiveUuid() != null && mx >= trX && mx <= trX + 50) {
+        int trX = remX - 60;
+        if (row.effectiveUuid() != null && mx >= trX && mx <= trX + 56) {
+            playClickSound();
             try {
-                UUID dst = UUID.fromString(row.effectiveUuid());
-                this.transferTargetRow = row;
-                this.transferCandidates = loadTransferCandidates(dst);
-            } catch (Exception ignored) {}
+                UUID src = UUID.fromString(row.effectiveUuid());
+                this.transferSourceRow = row;
+                this.transferCandidates = loadTransferCandidates(src);
+            } catch (Exception e) {
+                showToast("⚠ " + e.getMessage(), NeonTheme.CRIMSON);
+            }
             return true;
         }
         if (mx >= remX && mx <= remX + 44) {
+            playClickSound();
             ApprovedPlayerStore.remove(worldDir, row.keyFingerprint(), row.name());
             NameLockStore.removeByName(worldDir, row.name());
             showToast(tr("screen.peerpulsar.advanced.toast_removed", row.name()), NeonTheme.CRIMSON);
@@ -1067,7 +1348,7 @@ public class P2PAdvancedScreen extends Screen {
             networkScroll += (scrollY < 0 ? 1 : -1);
             return true;
         }
-        if (activeTab == Tab.SECURITY && transferTargetRow == null) {
+        if (activeTab == Tab.SECURITY && transferSourceRow == null) {
             playersScroll += (scrollY < 0 ? 1 : -1);
             return true;
         }

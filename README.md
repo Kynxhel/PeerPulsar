@@ -26,17 +26,21 @@ Click **Test** on the **Start P2P** screen (after reviewing the one-time consent
 | Mode | Best For | Relay Overhead | Works Behind CGNAT? |
 | :--- | :--- | :---: | :---: |
 | **Direct P2P (UPnP)** | Open NAT routers with UPnP enabled (1-hour auto-renewed lease + cleanup) | Direct | No |
-| **UDP Punch** | Cone CGNAT networks (Direct UDP P2P, AES-256-GCM encrypted signaling) | Direct | Yes (Cone NAT) |
+| **UDP Punch** | Cone CGNAT networks (Direct UDP P2P: **Auto** picks **RUDP**, **KCP**, or **QUIC**) | Direct | Yes (Cone NAT) |
 | **Tunnel Relay** | Symmetric NAT, strict firewalls, mobile hotspots (hides host IP) | Relayed (`bore.pub`) | Yes (Always) |
 | **Local LAN** | Same Wi-Fi / local network / VPN (no external services contacted) | Local | Yes (LAN) |
+
+### 3-Engine UDP P2P Transport (`RUDP` / `KCP` / `QUIC`) & Smart Switch Hints
+- **Auto Engine Probing:** Immediately after NAT hole punching, **UDP Punch** runs a ~150 ms probe to pick the best engine for your link: **RUDP** (lightweight/minimal CPU for clean `<55 ms` links), **KCP** (`10 ms` tick, SACK, fast-resend for jittery PvP or light packet loss), or **QUIC** (`tech.kwik`, TLS 1.3 encrypted transport + congestion control for high ping/loss/mobile networks).
+- **In-Game Switch Popup:** If your ping or packet loss changes noticeably for ~30 seconds, a bottom-right Neon hint (plus chat shortcut) offers to switch engines automatically with a clean ~1s reconnect, or you can lock an engine in **⚙ Advanced → Network Services → UDP Engine**.
 
 ### Room Key Protection, Join Approval & Player Controls
 - **Embedded Room Key (`#KEY`):** Always enabled on internet hosting modes (both Mojang Online and Offline LAN Auth), verified via HMAC-SHA256 over a fresh server nonce. Port scanners and uninvited players without the `#KEY` are silently rejected.
 - **Brute-Force Protection:** 5 failed Room Key attempts from the same IP within 30 seconds temporarily blocks that IP.
-- **New Code & Kick:** Rotate the `#KEY` mid-session with **New Code** without kicking current players or restarting the tunnel, and kick unwanted players from the live player list.
-- **Optional Join Approval (Off by Default):** Enable **Join Approval** on the Host screen to review incoming join requests in-game with `[Accept]`, `[Always]`, or `[Deny]`, matched by both nickname and Ed25519 device fingerprint.
-- **Guest Commands Control:** Even when Cheats are enabled for the host, joiners do not receive command/operator permissions unless **Guest Commands** is explicitly enabled in **Advanced → Security**.
-- **End-to-End Encrypted Offline LAN Auth:** Optional Offline LAN Auth disables Mojang account verification while still enforcing Minecraft's native RSA + AES-CFB8 transport encryption (`shouldAuthenticate = false`), channel-bound via SHA-256 host key hash into the `#KEY` HMAC and Ed25519 signature—protecting gameplay traffic against MITM and eavesdropping even over `bore.pub` or UDP Hole Punch (UDP RUDP transport headers remain unencrypted while the Minecraft stream inside is encrypted). Players receive deterministic Ed25519-key UUIDs with Ed25519 name locks, host name reservation, backup-first legacy data migration, and identity export/import.
+- **New Code, OP & Kick:** Rotate the `#KEY` mid-session with **New Code** without kicking current players or restarting the tunnel, and grant/revoke **OP** or **Kick** unwanted players from the live connected players list.
+- **Join Approval (On by Default):** **Join Approval** prompts you in-game with `[Accept]`, `[Always]`, or `[Deny]`, matched by both nickname and Ed25519 device fingerprint (toggleable on the Host screen).
+- **Guest Commands Control:** Even when Cheats are enabled for the host, joiners do not receive command/operator permissions unless **Guest Commands** is explicitly enabled in **Advanced → Security** (or granted per player via **OP**).
+- **End-to-End Encrypted Offline LAN Auth:** Optional Offline LAN Auth disables Mojang account verification while still enforcing Minecraft's native RSA + AES-CFB8 transport encryption (`shouldAuthenticate = false`), channel-bound via SHA-256 host key hash into the `#KEY` HMAC and Ed25519 signature—protecting gameplay traffic against MITM and eavesdropping even over `bore.pub` or UDP Hole Punch (and when **QUIC** is selected, Kwik adds TLS 1.3 transport encryption with an ephemeral P-256 certificate pinned via encrypted signaling). Players receive deterministic Ed25519-key UUIDs with Ed25519 name locks, host name reservation, backup-first legacy data migration, and identity export/import.
 - **Zero Session Token Access:** PeerPulsar never reads `User.getAccessToken()` or contacts Mojang session servers on behalf of clients.
 
 ### Configurable Network Services (Advanced Menu)

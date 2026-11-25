@@ -65,6 +65,7 @@ public final class OfflineAuth {
         String getHostRoomKey();
         String resolveRemoteIp(Connection connection);
         Executor getAsyncExecutor();
+        default void onPreApprovedJoin(String playerName) {}
     }
 
     private record PendingQuery(
@@ -280,6 +281,10 @@ public final class OfflineAuth {
             ApprovedPlayerStore.CheckResult check = ApprovedPlayerStore.check(worldDir, name, keyFingerprint, mojangUuid);
             if (check == ApprovedPlayerStore.CheckResult.APPROVED) {
                 ApprovedPlayerStore.touchLastSeen(worldDir, name, keyFingerprint, effectiveUuidStr, mojangUuid);
+                HostSecurityContext ctx = hostContext;
+                if (ctx != null) {
+                    ctx.onPreApprovedJoin(name);
+                }
                 if (query.offlineMode()) {
                     if (existingLock == null) {
                         NameLockStore.rebind(worldDir, name, keyFingerprint);

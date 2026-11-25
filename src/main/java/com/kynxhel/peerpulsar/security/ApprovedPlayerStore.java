@@ -13,6 +13,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 /**
  * Per-world list of host-approved joiners stored in {@code <world>/peerpulsar_approved.json}.
@@ -125,6 +126,32 @@ public final class ApprovedPlayerStore {
         boolean removed = entries.removeIf(e -> e != null
                 && (keyFingerprint == null || keyFingerprint.equalsIgnoreCase(e.keyFingerprint()))
                 && (playerName == null || playerName.equalsIgnoreCase(e.name())));
+        if (removed) {
+            write(file, entries);
+        }
+        return removed;
+    }
+
+    /**
+     * Revokes Always-approval for a player matching {@code playerName} or {@code effectiveUuid}
+     * (used when kicking a player so they must be re-approved on their next join).
+     */
+    public static synchronized boolean removeByNameOrUuid(Path worldDir, String playerName, UUID effectiveUuid) {
+        if (worldDir == null || ((playerName == null || playerName.isBlank()) && effectiveUuid == null)) {
+            return false;
+        }
+        String uuidStr = effectiveUuid != null ? effectiveUuid.toString() : null;
+        Path file = worldDir.resolve(FILE_NAME);
+        List<ApprovedEntry> entries = read(file);
+        boolean removed = entries.removeIf(e -> {
+            if (e == null) return false;
+            boolean nameMatch = playerName != null && !playerName.isBlank()
+                    && e.name() != null && playerName.equalsIgnoreCase(e.name());
+            boolean uuidMatch = uuidStr != null
+                    && ((e.effectiveUuid() != null && uuidStr.equalsIgnoreCase(e.effectiveUuid()))
+                    || (e.mojangUuid() != null && uuidStr.equalsIgnoreCase(e.mojangUuid())));
+            return nameMatch || uuidMatch;
+        });
         if (removed) {
             write(file, entries);
         }

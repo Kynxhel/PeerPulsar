@@ -194,6 +194,23 @@ class SecurityCryptoTest {
     }
 
     @Test
+    void removeByNameOrUuidRevokesAlwaysApprovalOnKick(@TempDir Path worldDir) {
+        String fpA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        UUID effUuid = UUID.randomUUID();
+        ApprovedPlayerStore.approve(worldDir, new ApprovedPlayerStore.ApprovedEntry(
+                "deneme2", fpA, null, effUuid.toString(), 1000L, 1000L
+        ));
+        assertEquals(ApprovedPlayerStore.CheckResult.APPROVED,
+                ApprovedPlayerStore.check(worldDir, "deneme2", fpA, null));
+
+        // Revoking by UUID removes saved Always-approval even if name casing or name differs
+        assertTrue(ApprovedPlayerStore.removeByNameOrUuid(worldDir, "deneme2", effUuid));
+        assertEquals(ApprovedPlayerStore.CheckResult.UNKNOWN,
+                ApprovedPlayerStore.check(worldDir, "deneme2", fpA, null));
+        assertFalse(ApprovedPlayerStore.removeByNameOrUuid(worldDir, "deneme2", effUuid));
+    }
+
+    @Test
     void joinApprovalManagerQueueDecisionsAndTimeout() throws Exception {
         JoinApprovalManager mgr = new JoinApprovalManager();
         var req1 = mgr.requestApproval("Alex", "12345678abcdef00", null, false, false, 5000L);
