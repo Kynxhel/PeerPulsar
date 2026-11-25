@@ -28,6 +28,7 @@ public class NeonModeOptionCard extends AbstractButton {
     private final BooleanSupplier recommendedSupplier;
     private final int accentRgb;
     private final Runnable onSelectAction;
+    private BooleanSupplier untestedSupplier = () -> false;
 
     private float hoverProgress = 0.0f;
     private long lastFrameNanos = System.nanoTime();
@@ -52,6 +53,11 @@ public class NeonModeOptionCard extends AbstractButton {
         this.onSelectAction = onSelectAction;
     }
 
+    public NeonModeOptionCard setUntestedSupplier(BooleanSupplier untestedSupplier) {
+        this.untestedSupplier = untestedSupplier != null ? untestedSupplier : () -> false;
+        return this;
+    }
+
     @Override
     public void onPress(InputWithModifiers input) {
         if (this.active && !this.testingSupplier.getAsBoolean() && this.supportedSupplier.getAsBoolean() && this.onSelectAction != null) {
@@ -66,6 +72,7 @@ public class NeonModeOptionCard extends AbstractButton {
         lastFrameNanos = now;
 
         boolean testing = this.testingSupplier.getAsBoolean();
+        boolean untested = !testing && this.untestedSupplier.getAsBoolean();
         boolean supported = !testing && this.supportedSupplier.getAsBoolean();
         boolean selected = this.selectedSupplier.getAsBoolean();
         boolean recommended = !testing && supported && this.recommendedSupplier.getAsBoolean();
@@ -83,8 +90,8 @@ public class NeonModeOptionCard extends AbstractButton {
         int w = this.getWidth();
         int h = this.getHeight();
 
-        int dotRgb = testing ? NeonTheme.AMBER : (supported ? NeonTheme.EMERALD : NeonTheme.CRIMSON);
-        int cardAccent = selected ? this.accentRgb : (supported ? NeonTheme.SLATE : NeonTheme.CRIMSON);
+        int dotRgb = testing ? NeonTheme.AMBER : (untested ? NeonTheme.AMBER : (supported ? NeonTheme.EMERALD : NeonTheme.CRIMSON));
+        int cardAccent = selected ? this.accentRgb : (untested ? NeonTheme.AMBER : (supported ? NeonTheme.SLATE : NeonTheme.CRIMSON));
 
         // Outer glow when selected or hovered
         if (selected || (this.hoverProgress > 0.04f && clickable)) {
@@ -98,6 +105,9 @@ public class NeonModeOptionCard extends AbstractButton {
         if (selected) {
             topBg = NeonTheme.withAlpha(this.accentRgb, 52);
             botBg = 0xDD0A1022;
+        } else if (untested) {
+            topBg = NeonTheme.lerpColor(0xBB11182C, NeonTheme.withAlpha(this.accentRgb, 42), this.hoverProgress);
+            botBg = 0xCC0A0F1E;
         } else if (!supported && !testing) {
             topBg = 0x99160A0E;
             botBg = 0x990C070A;
@@ -108,7 +118,7 @@ public class NeonModeOptionCard extends AbstractButton {
         graphics.fillGradient(x, y, x + w, y + h, topBg, botBg);
 
         // Border
-        int borderAlpha = selected ? 235 : (clickable ? Math.round(75 + 120 * this.hoverProgress) : 65);
+        int borderAlpha = selected ? 235 : (untested ? Math.round(90 + 95 * this.hoverProgress) : (clickable ? Math.round(75 + 120 * this.hoverProgress) : 65));
         graphics.outline(x, y, w, h, NeonTheme.withAlpha(cardAccent, borderAlpha));
 
         // Left selection bar
@@ -117,9 +127,9 @@ public class NeonModeOptionCard extends AbstractButton {
         }
 
         double timeSec = NeonTheme.nowSec();
-        float pulse = NeonTheme.pulse(timeSec, testing ? 7.0 : 3.5);
+        float pulse = NeonTheme.pulse(timeSec, testing ? 7.0 : (untested ? 4.5 : 3.5));
 
-        // Status Dot (Green = supported, Red = unsupported, Amber = testing)
+        // Status Dot (Green = supported, Red = unsupported, Amber = testing/untested)
         int dotCx = x + 10;
         int dotCy = y + 10;
         graphics.fill(dotCx - 3, dotCy - 3, dotCx + 4, dotCy + 4,
@@ -132,7 +142,7 @@ public class NeonModeOptionCard extends AbstractButton {
         // Title + "(Recommended)" badge
         int titleX = x + 18;
         int maxTextW = Math.max(20, w - 22);
-        int titleColor = supported ? NeonTheme.TEXT_PRIMARY : (testing ? NeonTheme.TEXT_SECONDARY : 0xFF9E7B82);
+        int titleColor = (supported || untested) ? NeonTheme.TEXT_PRIMARY : (testing ? NeonTheme.TEXT_SECONDARY : 0xFF9E7B82);
         String drawnTitle = this.title != null ? this.title : "";
         if (font.width(drawnTitle) > maxTextW) {
             drawnTitle = font.plainSubstrByWidth(drawnTitle, maxTextW);
@@ -163,7 +173,9 @@ public class NeonModeOptionCard extends AbstractButton {
         }
         int subColor = testing
                 ? NeonTheme.withAlpha(NeonTheme.AMBER, 230)
-                : (supported ? NeonTheme.TEXT_SECONDARY : NeonTheme.withAlpha(NeonTheme.CRIMSON, 215));
+                : (untested
+                ? NeonTheme.withAlpha(NeonTheme.AMBER, 215)
+                : (supported ? NeonTheme.TEXT_SECONDARY : NeonTheme.withAlpha(NeonTheme.CRIMSON, 215)));
         graphics.text(font, sub, titleX, y + 19, subColor, false);
     }
 

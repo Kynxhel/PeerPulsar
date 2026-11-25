@@ -2,6 +2,9 @@
 
 > **Project History:** Originally created as *FabricP2PMod*, temporarily rebranded to *Atarca* in v3.0.0 (when Cloud Sync / Google OAuth was removed), and renamed to **PeerPulsar** in v3.1.0.
 
+## v3.2.4+26.3
+- **Host Screen Initial Network Test UX:** Added an attention-pulsing halo and shimmer (`NeonButton.setAttentionPulse`) plus an animated bouncing `»` pointer next to the **Test** button on `P2PHostScreen` whenever network diagnostics have not been run yet (`IDLE`), styled untested internet connection mode cards (`Direct P2P`, `UDP Punch`, `Tunnel Relay`) with calm amber indicators instead of red error styling, and updated the idle/untested labels (`en_us.json` / `tr_tr.json`) to clearly prompt clicking **Test**.
+
 ## v3.2.3+26.3
 - **Log Privacy Redaction:** Removed public IP addresses, router WAN IPs, peer IP addresses, signaling topic IDs, and room codes/`#KEY` secrets from `latest.log` and host chat log output so sharing game logs for troubleshooting never leaks sensitive network or room credentials.
 - **Independent Host & Join Consent Flags:** Separated host-side Network Diagnostics consent (`networkTestConsent`) from join-side UDP P2P consent (`udpJoinConsent`), and ensured trusting a one-off custom signaling invite no longer auto-grants host diagnostics or default UDP consent.

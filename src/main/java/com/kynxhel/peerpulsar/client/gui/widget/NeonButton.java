@@ -19,6 +19,7 @@ public class NeonButton extends AbstractButton {
     private final Runnable onPressAction;
     private int accentRgb;
     private boolean pulsingBeacon;
+    private boolean attentionPulse;
 
     private float hoverProgress = 0.0f;
     private float rippleProgress = 1.0f;
@@ -37,6 +38,11 @@ public class NeonButton extends AbstractButton {
 
     public NeonButton setPulsingBeacon(boolean pulsingBeacon) {
         this.pulsingBeacon = pulsingBeacon;
+        return this;
+    }
+
+    public NeonButton setAttentionPulse(boolean attentionPulse) {
+        this.attentionPulse = attentionPulse;
         return this;
     }
 
@@ -73,9 +79,16 @@ public class NeonButton extends AbstractButton {
         int h = this.getHeight();
         int effectiveAccent = this.active ? this.accentRgb : NeonTheme.SLATE;
 
-        // Outer neon bloom on hover (or pulsing beacon)
+        // Outer neon bloom on hover (or pulsing beacon / attention pulse)
         float beacon = pulsingBeacon && this.active ? (0.45f + 0.55f * NeonTheme.pulse(timeSec, 4.0)) : 0.0f;
-        float glowStrength = Math.max(this.hoverProgress, beacon * 0.75f);
+        float attn = (attentionPulse && this.active) ? (0.35f + 0.65f * NeonTheme.pulse(timeSec, 6.2)) : 0.0f;
+        float glowStrength = Math.max(this.hoverProgress, Math.max(beacon * 0.75f, attn));
+        if (attn > 0.02f) {
+            graphics.fill(x - 4, y - 4, x + w + 4, y + h + 4,
+                    NeonTheme.withAlpha(effectiveAccent, Math.round(32 * attn)));
+            graphics.fill(x - 3, y - 3, x + w + 3, y + h + 3,
+                    NeonTheme.withAlpha(effectiveAccent, Math.round(55 * attn)));
+        }
         if (glowStrength > 0.02f && this.active) {
             graphics.fill(x - 2, y - 2, x + w + 2, y + h + 2,
                     NeonTheme.withAlpha(effectiveAccent, Math.round(38 * glowStrength)));
@@ -84,30 +97,32 @@ public class NeonButton extends AbstractButton {
         }
 
         // Glass button body
+        float fillMix = Math.max(this.hoverProgress * 0.75f, attn * 0.55f);
         int topColor = this.active
-                ? NeonTheme.lerpColor(0xD6121A30, NeonTheme.withAlpha(effectiveAccent, 105), this.hoverProgress * 0.75f)
+                ? NeonTheme.lerpColor(0xD6121A30, NeonTheme.withAlpha(effectiveAccent, 105), fillMix)
                 : 0xAA0C101C;
         int bottomColor = this.active
-                ? NeonTheme.lerpColor(0xE00A0F1E, NeonTheme.withAlpha(effectiveAccent, 65), this.hoverProgress * 0.75f)
+                ? NeonTheme.lerpColor(0xE00A0F1E, NeonTheme.withAlpha(effectiveAccent, 65), fillMix)
                 : 0xAA080B14;
         graphics.fillGradient(x, y, x + w, y + h, topColor, bottomColor);
 
         // Left vertical accent bar
-        int barAlpha = this.active ? Math.round(170 + 85 * this.hoverProgress) : 65;
+        int barAlpha = this.active ? Math.round(170 + 85 * Math.max(this.hoverProgress, attn)) : 65;
         graphics.fill(x + 1, y + 2, x + 3, y + h - 2, NeonTheme.withAlpha(effectiveAccent, barAlpha));
 
         // Scissored shimmer sweep & click ripple inside button bounds
         graphics.enableScissor(x + 1, y + 1, x + w - 1, y + h - 1);
 
-        // Glossy shimmer sweep on hover
-        if (this.hoverProgress > 0.05f && this.active) {
+        // Glossy shimmer sweep on hover or attentionPulse
+        if ((this.hoverProgress > 0.05f || attn > 0.05f) && this.active) {
+            float sweepAlpha = Math.max(this.hoverProgress, attn * 0.85f);
             float sweepPos = (float) ((timeSec * 1.15) % 1.6) - 0.3f;
             int sx = x + Math.round(sweepPos * w);
             int sw = Math.max(18, w / 4);
             graphics.fill(sx, y, sx + sw, y + h,
-                    NeonTheme.withAlpha(0xFFFFFF, Math.round(28 * this.hoverProgress)));
+                    NeonTheme.withAlpha(0xFFFFFF, Math.round(28 * sweepAlpha)));
             graphics.fill(sx + sw / 3, y, sx + (sw * 2) / 3, y + h,
-                    NeonTheme.withAlpha(0xFFFFFF, Math.round(45 * this.hoverProgress)));
+                    NeonTheme.withAlpha(0xFFFFFF, Math.round(45 * sweepAlpha)));
         }
 
         // Click ripple shockwave
@@ -123,7 +138,7 @@ public class NeonButton extends AbstractButton {
 
         // Crisp neon border
         int borderAlpha = this.active
-                ? Math.round(115 + 140 * Math.max(this.hoverProgress, beacon * 0.6f))
+                ? Math.round(115 + 140 * Math.max(this.hoverProgress, Math.max(beacon * 0.6f, attn)))
                 : 55;
         graphics.outline(x, y, w, h, NeonTheme.withAlpha(effectiveAccent, borderAlpha));
 
@@ -140,7 +155,7 @@ public class NeonButton extends AbstractButton {
 
         // Centered label
         int textColor = this.active
-                ? NeonTheme.lerpColor(NeonTheme.TEXT_PRIMARY, 0xFFFFFFFF, this.hoverProgress)
+                ? NeonTheme.lerpColor(NeonTheme.TEXT_PRIMARY, 0xFFFFFFFF, Math.max(this.hoverProgress, attn * 0.85f))
                 : NeonTheme.TEXT_MUTED;
         int textY = y + (h - 8) / 2;
         graphics.centeredText(font, this.getMessage(), x + w / 2 + textXOffset, textY, textColor);

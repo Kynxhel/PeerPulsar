@@ -124,7 +124,7 @@ public class P2PHostScreen extends Screen {
 
         // Quick Re-Test Internet & NAT Diagnostics button
         this.retestButton = new NeonButton(
-                panelLeft + panelW - 56, heroY + 5, 46, 14,
+                panelLeft + panelW - 64, heroY + 5, 56, 15,
                 Component.translatable("screen.peerpulsar.host.btn_retest"),
                 NeonTheme.AMBER,
                 () -> requestNetworkCheck(true)
@@ -300,7 +300,7 @@ public class P2PHostScreen extends Screen {
                 () -> networkManager.getRecommendedMode(diag.getLastReport()) == ConnectionMode.DIRECT_UPNP,
                 NeonTheme.EMERALD,
                 () -> selectMode(ConnectionMode.DIRECT_UPNP, directModeCard, NeonTheme.EMERALD)
-        );
+        ).setUntestedSupplier(() -> diag.getStatus() == NetworkDiagnosticsService.P2PCompatibilityStatus.IDLE);
         this.addRenderableWidget(directModeCard);
 
         this.udpPunchModeCard = new NeonModeOptionCard(
@@ -325,7 +325,7 @@ public class P2PHostScreen extends Screen {
                 () -> networkManager.getRecommendedMode(diag.getLastReport()) == ConnectionMode.UDP_HOLE_PUNCH,
                 NeonTheme.CYAN,
                 () -> selectMode(ConnectionMode.UDP_HOLE_PUNCH, udpPunchModeCard, NeonTheme.CYAN)
-        );
+        ).setUntestedSupplier(() -> diag.getStatus() == NetworkDiagnosticsService.P2PCompatibilityStatus.IDLE);
         this.addRenderableWidget(udpPunchModeCard);
 
         this.tunnelModeCard = new NeonModeOptionCard(
@@ -350,7 +350,7 @@ public class P2PHostScreen extends Screen {
                 () -> networkManager.getRecommendedMode(diag.getLastReport()) == ConnectionMode.TUNNEL_RELAY,
                 NeonTheme.VIOLET,
                 () -> selectMode(ConnectionMode.TUNNEL_RELAY, tunnelModeCard, NeonTheme.VIOLET)
-        );
+        ).setUntestedSupplier(() -> diag.getStatus() == NetworkDiagnosticsService.P2PCompatibilityStatus.IDLE);
         this.addRenderableWidget(tunnelModeCard);
 
         this.lanModeCard = new NeonModeOptionCard(
@@ -635,9 +635,16 @@ public class P2PHostScreen extends Screen {
                 ).withStyle(ChatFormatting.BOLD));
             }
         }
+        boolean needsInitialTest = !active && !busy && !testing
+                && diag.getStatus() == NetworkDiagnosticsService.P2PCompatibilityStatus.IDLE;
         if (retestButton != null) {
             retestButton.visible = !active;
             retestButton.active = !active && !busy && !testing;
+            retestButton.setPulsingBeacon(needsInitialTest);
+            retestButton.setAttentionPulse(needsInitialTest);
+            retestButton.setMessage(needsInitialTest
+                    ? Component.translatable("screen.peerpulsar.host.btn_retest").withStyle(ChatFormatting.BOLD)
+                    : Component.translatable("screen.peerpulsar.host.btn_retest"));
         }
         if (copyDiscordButton != null) copyDiscordButton.active = active;
         if (copyCodeQuickButton != null) {
@@ -805,15 +812,28 @@ public class P2PHostScreen extends Screen {
             statusColor = NeonTheme.CRIMSON;
         } else {
             statusLabel = tr("screen.peerpulsar.host.upnp_idle");
-            statusColor = NeonTheme.TEXT_SECONDARY;
+            statusColor = NeonTheme.AMBER;
         }
 
-        int maxStatusW = panelW - (active ? 20 : 70);
+        boolean needsInitialTest = !active && !networkManager.isStarting() && !diag.isTesting()
+                && report.status() == NetworkDiagnosticsService.P2PCompatibilityStatus.IDLE;
+        int maxStatusW = panelW - (active ? 20 : (needsInitialTest ? 96 : 78));
         String drawnStatus = "◈ " + statusLabel;
         if (this.font.width(drawnStatus) > maxStatusW) {
             drawnStatus = this.font.plainSubstrByWidth(drawnStatus, Math.max(20, maxStatusW - 8)) + "...";
         }
         graphics.text(this.font, drawnStatus, panelLeft + 10, cardY + 8, NeonTheme.withAlpha(statusColor, 255), true);
+
+        if (needsInitialTest && retestButton != null && retestButton.visible) {
+            int bounce = Math.round((float) Math.sin(timeSec * 6.5) * 3.0f);
+            float arrowPulse = 0.55f + 0.45f * NeonTheme.pulse(timeSec, 6.2);
+            int arrowX = retestButton.getX() - 14 + bounce;
+            int arrowY = retestButton.getY() + 3;
+            graphics.fill(arrowX - 2, arrowY - 1, arrowX + 9, arrowY + 9,
+                    NeonTheme.withAlpha(NeonTheme.AMBER, Math.round(45 * arrowPulse)));
+            graphics.text(this.font, Component.literal("»").withStyle(ChatFormatting.BOLD),
+                    arrowX + 1, arrowY, NeonTheme.withAlpha(NeonTheme.AMBER, Math.round(255 * arrowPulse)), true);
+        }
 
         if (diag.isTesting() || upnp.getStatus() == UPnPService.UPnPStatus.SEARCHING || networkManager.isStarting()) {
             NeonRenderUtils.drawScannerBar(graphics, panelLeft + 10, cardY + 20, panelW - 20, NeonTheme.AMBER, timeSec);
