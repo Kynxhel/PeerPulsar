@@ -241,4 +241,25 @@ class SecurityCryptoTest {
         assertArrayEquals(kp.getPublic().getEncoded(), imported.publicKeyEncoded());
         assertEquals(ClientIdentity.Status.OK, ClientIdentity.inspectStatus(importedTarget, true));
     }
+
+    @Test
+    void verifiedHybridServerIdRejectsForgedOrShortNonces() {
+        byte[] validNonce = new byte[32];
+        for (int i = 0; i < validNonce.length; i++) {
+            validNonce[i] = (byte) (i + 1);
+        }
+        String expected = OfflineAuth.computeHybridServerId(validNonce);
+
+        assertEquals(expected, OfflineAuth.resolveVerifiedHybridServerId(validNonce, expected));
+        assertEquals(expected, OfflineAuth.resolveVerifiedHybridServerId(validNonce, ""));
+        assertEquals(expected, OfflineAuth.resolveVerifiedHybridServerId(validNonce, null));
+
+        // Forged third-party serverId must be rejected
+        assertNull(OfflineAuth.resolveVerifiedHybridServerId(
+                validNonce, "4ed1f46bbe04bc756bcb17c0c7ce3e4632f06a48"));
+
+        // Null or short (<16 byte) nonces must be rejected
+        assertNull(OfflineAuth.resolveVerifiedHybridServerId(null, expected));
+        assertNull(OfflineAuth.resolveVerifiedHybridServerId(new byte[15], null));
+    }
 }

@@ -2,6 +2,12 @@
 
 > **Project History:** Originally created as *FabricP2PMod*, temporarily rebranded to *Atarca* in v3.0.0 (when Cloud Sync / Google OAuth was removed), and renamed to **PeerPulsar** in v3.1.0.
 
+## Unreleased
+- **Security & Hybrid Auth Hardening:** Domain-separated the locally derived hybrid Mojang verification challenge ID so Mojang session tokens are never exposed to hosts or third-party servers, and added join-side UDP network consent and explicit domain confirmation for custom signaling URLs.
+- **SSRF & Network Validation:** Enforced public-only URL/address validation on custom network/signaling endpoints to block loopback, link-local, and private network targets.
+- **UI Resource Leak & Cross-Platform Identity Backup:** Fixed UI resource leaks (`P2PJoinScreen`) and replaced `javax.swing`/`java.awt` file dialogs with cross-platform game-directory backup export/import (`peerpulsar-identity-backup.json`) for identity management.
+- **Icon & Storefront Compliance:** Upscaled `assets/peerpulsar/icon.png` to `512x512` ARGB PNG with high-quality bicubic resampling, and updated `MODRINTH_CURSEFORGE.md`, `PRIVACY.md`, and `README.md` to use `peerpulsar-*.jar`, note that both host and joiners need PeerPulsar installed, use neutral Fabric API dependency text, and clarify optional suggested community defaults (`bore.pub`, `ntfy.sh`, STUN, IP echo) vs. Local LAN offline behavior.
+
 ## v3.2.0+26.3
 - **Layer 1 Room Key Everywhere & Hardening:** Enforced the embedded `#KEY` HMAC-SHA256 login challenge across both Mojang Online and Offline LAN Auth on all internet hosting modes (Direct P2P, UDP Hole Punch, Tunnel Relay) and optionally on Local LAN (`Require Room Key on LAN`), added per-IP brute-force rate limiting (5 failures in 30s -> 5m block), randomized the default host port, and fixed MC 26.3 guest command permissions so joiners do not automatically receive commands when cheats are enabled unless opted in via **Advanced → Security**.
 - **New Code, Connected Players & Kick:** Added a mid-session **🔄 New Code** button to rotate the `#KEY` without restarting tunnels or kicking active players, plus a live connected players list with ping and **Kick** buttons on the Host screen.

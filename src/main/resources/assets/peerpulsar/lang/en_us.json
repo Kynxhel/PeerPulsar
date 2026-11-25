@@ -117,6 +117,13 @@
   "screen.peerpulsar.join.resolved_udp": "UDP Hole Punch Room: %s",
   "screen.peerpulsar.join.resolved_udp_hint": "Direct CGNAT-bypass UDP P2P — click Join World.",
   "screen.peerpulsar.join.resolved_udp_key_hint": "Room Key detected • Direct UDP P2P — click Join World.",
+  "screen.peerpulsar.join.custom_signal_hint": "Custom signaling: %s",
+  "screen.peerpulsar.join.warn_custom_signal_title": "Custom Signaling Server",
+  "screen.peerpulsar.join.warn_custom_signal_body": "This UDP room code uses a custom signaling server (%s) instead of the default service. Your public IP and session metadata will be sent to that server to coordinate the P2P connection. Continue only if you trust this invite.",
+  "screen.peerpulsar.join.warn_custom_signal_confirm": "Trust & Join",
+  "screen.peerpulsar.join.consent_udp_title": "UDP P2P Connection Consent",
+  "screen.peerpulsar.join.consent_udp_body": "Joining via a UDP room code will contact your configured STUN servers and the signaling server (%s) to exchange endpoints and punch through NAT. Your public IP is shared with the signaling topic and host.",
+  "screen.peerpulsar.join.consent_udp_confirm": "Continue & Join",
   "screen.peerpulsar.join.resolved_key_hint": "Room Key detected • Ready to connect.",
   "screen.peerpulsar.join.toast_punching": "Exchanging STUN endpoints & punching through NAT...",
   "screen.peerpulsar.join.toast_punch_fail": "UDP Hole Punch failed: %s",
@@ -190,5 +197,6 @@
   "screen.peerpulsar.identity.warning_private": "Keep this file private. Anyone with it can impersonate your offline identity.",
   "screen.peerpulsar.identity.toast_exported": "Identity exported to %s (keep this file private!).",
   "screen.peerpulsar.identity.toast_imported": "Identity imported! Fingerprint: %s",
+  "screen.peerpulsar.identity.toast_import_not_found": "No backup found. Place peerpulsar-identity-backup.json in your Minecraft folder.",
   "screen.peerpulsar.identity.toast_recreated": "Created a new Ed25519 identity."
 }

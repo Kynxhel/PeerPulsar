@@ -4,6 +4,7 @@ import com.kynxhel.peerpulsar.config.PeerPulsarConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,6 +40,40 @@ class NetworkEndpointsTest {
         assertFalse(NetworkEndpoints.isValidHttpsUrl("https://user@ntfy.sh"));
         assertFalse(NetworkEndpoints.isValidHttpsUrl("https://ntfy.sh?a=1"));
         assertFalse(NetworkEndpoints.isValidHttpsUrl("https://bad host"));
+    }
+
+    @Test
+    void publicHttpsUrlRejectsLocalPrivateCgnatAndInternalHosts() throws Exception {
+        assertEquals("https://ntfy.sh", NetworkEndpoints.normalizePublicHttpsUrl("https://ntfy.sh"));
+        assertEquals("https://ntfy.example.com:8443", NetworkEndpoints.normalizePublicHttpsUrl("https://ntfy.example.com:8443/"));
+        assertEquals("https://93.184.216.34", NetworkEndpoints.normalizePublicHttpsUrl("https://93.184.216.34"));
+        assertEquals("https://[2606:4700:4700::1111]", NetworkEndpoints.normalizePublicHttpsUrl("https://[2606:4700:4700::1111]"));
+
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://localhost"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://LOCALHOST."));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://sub.localhost"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://127.0.0.1"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://169.254.169.254"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://192.168.1.1"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://10.0.0.5"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://172.16.0.1"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://100.64.0.1"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://[::1]"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://[fc00::1]"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://[fe80::1]"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://host.local"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://service.internal"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://router.lan"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://nas.home.arpa"));
+        assertNull(NetworkEndpoints.normalizePublicHttpsUrl("https://intranet"));
+
+        assertTrue(NetworkEndpoints.isNonPublicHostLiteralOrName(null));
+        assertTrue(NetworkEndpoints.isNonPublicHostLiteralOrName(" "));
+        assertTrue(NetworkEndpoints.isNonPublicAddress(null));
+        assertTrue(NetworkEndpoints.isNonPublicAddress(InetAddress.ofLiteral("100.127.255.254")));
+        assertFalse(NetworkEndpoints.isNonPublicAddress(InetAddress.ofLiteral("100.128.0.1")));
+        assertTrue(NetworkEndpoints.isNonPublicAddress(InetAddress.ofLiteral("fd12:3456:789a::1")));
+        assertFalse(NetworkEndpoints.isNonPublicAddress(InetAddress.ofLiteral("8.8.8.8")));
     }
 
     @Test

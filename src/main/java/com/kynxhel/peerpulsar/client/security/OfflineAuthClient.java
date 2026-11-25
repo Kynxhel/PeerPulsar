@@ -14,6 +14,11 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * Client-side login query handler for PeerPulsar Room Key, Ed25519 identity, and hybrid Mojang proof.
+ * <p>
+ * Security note: {@code user.getAccessToken()} is never transmitted to hosts or third parties. It is
+ * only passed locally to Mojang's official {@code sessionService().joinServer()} with a locally
+ * derived, domain-separated ({@code peerpulsar-mojang-v1|}) SHA-256 {@code serverId} computed from
+ * the challenge nonce to prevent cross-server session relay attacks.
  */
 public final class OfflineAuthClient {
     private OfflineAuthClient() {}
@@ -24,6 +29,9 @@ public final class OfflineAuthClient {
             byte[] nonce = buf.readByteArray(64);
             boolean hybridAllowed = buf.readBoolean();
             String hybridServerId = buf.readUtf(64);
+            String verifiedHybridServerId = hybridAllowed
+                    ? OfflineAuth.resolveVerifiedHybridServerId(nonce, hybridServerId)
+                    : null;
             String roomKey = P2PNetworkManager.getInstance().consumePendingJoinKey();
             User user = client.getUser();
             String name = user.getName();
@@ -32,9 +40,9 @@ public final class OfflineAuthClient {
                 ClientIdentity identity = ClientIdentity.get();
 
                 boolean attemptedHybrid = false;
-                if (hybridAllowed && hybridServerId != null && !hybridServerId.isEmpty() && isLikelyMojangToken(user)) {
+                if (verifiedHybridServerId != null && isLikelyMojangToken(user)) {
                     try {
-                        client.services().sessionService().joinServer(user.getProfileId(), user.getAccessToken(), hybridServerId);
+                        client.services().sessionService().joinServer(user.getProfileId(), user.getAccessToken(), verifiedHybridServerId);
                         attemptedHybrid = true;
                     } catch (Exception e) {
                         PeerPulsar.LOGGER.debug("[PeerPulsar-Auth] Hybrid Mojang joinServer skipped/failed, falling back to key UUID: {}", e.getMessage());

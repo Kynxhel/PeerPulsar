@@ -19,8 +19,10 @@ import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -570,23 +572,19 @@ public class UPnPService {
     }
 
     /**
-     * Resolves the active non-loopback LAN IPv4 address instantaneously using UDP route lookup,
-     * falling back to enumerating active NetworkInterfaces (avoids 127.0.1.1 on offline Linux hosts).
+     * Resolves the active non-loopback LAN IPv4 address purely by enumerating local NetworkInterfaces
+     * (without contacting any external host), falling back to {@link InetAddress#getLocalHost()}.
      */
     private String resolveLocalIpAddress() {
-        try (DatagramSocket socket = new DatagramSocket()) {
-            socket.connect(InetAddress.getByName("8.8.8.8"), 53);
-            InetAddress local = socket.getLocalAddress();
-            if (local instanceof Inet4Address && !local.isLoopbackAddress() && !local.isAnyLocalAddress()) {
-                return local.getHostAddress();
-            }
-        } catch (Exception ignored) {}
-
         try {
             Enumeration<NetworkInterface> ifaces = NetworkInterface.getNetworkInterfaces();
-            while (ifaces != null && ifaces.hasMoreElements()) {
-                NetworkInterface iface = ifaces.nextElement();
-                if (!iface.isUp() || iface.isLoopback() || iface.isVirtual()) continue;
+            List<NetworkInterface> ifaceList = ifaces != null ? Collections.list(ifaces) : List.of();
+
+            // Pass 1: Prefer physical/non-point-to-point site-local IPv4 interfaces
+            for (NetworkInterface iface : ifaceList) {
+                if (!iface.isUp() || iface.isLoopback() || iface.isVirtual() || iface.isPointToPoint()) {
+                    continue;
+                }
                 Enumeration<InetAddress> addrs = iface.getInetAddresses();
                 while (addrs.hasMoreElements()) {
                     InetAddress addr = addrs.nextElement();
@@ -595,6 +593,24 @@ public class UPnPService {
                     }
                 }
             }
+
+            // Pass 2: Any active non-loopback, non-virtual, non-link-local IPv4 address
+            for (NetworkInterface iface : ifaceList) {
+                if (!iface.isUp() || iface.isLoopback() || iface.isVirtual()) {
+                    continue;
+                }
+                Enumeration<InetAddress> addrs = iface.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    InetAddress addr = addrs.nextElement();
+                    if (addr instanceof Inet4Address
+                            && !addr.isLinkLocalAddress()
+                            && !addr.isLoopbackAddress()
+                            && !addr.isAnyLocalAddress()) {
+                        return addr.getHostAddress();
+                    }
+                }
+            }
+
             return InetAddress.getLocalHost().getHostAddress();
         } catch (Exception ex) {
             return "127.0.0.1";

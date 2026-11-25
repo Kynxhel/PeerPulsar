@@ -303,4 +303,24 @@ class RoomCodeHelperTest {
         assertEquals(17835, relayTarget.port());
         assertEquals(key, relayTarget.roomKey());
     }
+
+    @Test
+    void udpRoomCodeRejectsEmbeddedNonPublicSignalingHosts() {
+        String baseUdp = "UDP-ABCD-2345-EFGH";
+        for (String badHost : new String[]{
+                "127.0.0.1",
+                "169.254.169.254",
+                "localhost",
+                "192.168.1.1",
+                "10.0.0.5",
+                "100.64.0.1",
+                "[::1]",
+                "host.local"
+        }) {
+            String encoded = Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(badHost.getBytes(StandardCharsets.UTF_8));
+            assertNull(RoomCodeHelper.decodeRoomCode(baseUdp + "~" + encoded),
+                    "Room code with non-public signaling host must be rejected: " + badHost);
+        }
+    }
 }

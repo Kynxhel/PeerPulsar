@@ -4,13 +4,16 @@ import com.kynxhel.peerpulsar.client.gui.fx.NeonRenderUtils;
 import com.kynxhel.peerpulsar.client.gui.fx.NeonTheme;
 import com.kynxhel.peerpulsar.client.gui.fx.ParticleBackground;
 import com.kynxhel.peerpulsar.client.gui.widget.NeonButton;
+import com.kynxhel.peerpulsar.client.network.NetworkEndpoints;
 import com.kynxhel.peerpulsar.client.network.P2PNetworkManager;
 import com.kynxhel.peerpulsar.client.network.RoomCodeHelper;
 import com.kynxhel.peerpulsar.client.network.UdpHolePunchService;
+import com.kynxhel.peerpulsar.config.PeerPulsarConfig;
 import com.kynxhel.peerpulsar.security.ClientIdentity;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ServerData;
@@ -245,6 +248,51 @@ public class P2PJoinScreen extends Screen {
 
         RoomCodeHelper.ConnectionTarget target = this.parsedTarget;
 
+        if (target.isUdpHolePunch() && target.hasSignalingServer()) {
+            this.minecraft.setScreenAndShow(new ConfirmScreen(
+                    confirmed -> {
+                        if (this.minecraft != null) {
+                            this.minecraft.setScreenAndShow(this);
+                        }
+                        if (confirmed) {
+                            proceedConnect(target);
+                        }
+                    },
+                    Component.translatable("screen.peerpulsar.join.warn_custom_signal_title").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD),
+                    Component.translatable("screen.peerpulsar.join.warn_custom_signal_body", target.signalingServer()),
+                    Component.translatable("screen.peerpulsar.join.warn_custom_signal_confirm"),
+                    Component.translatable("gui.cancel")
+            ));
+            return;
+        }
+
+        if (target.isUdpHolePunch() && !PeerPulsarConfig.get().hasNetworkTestConsent()) {
+            this.minecraft.setScreenAndShow(new ConfirmScreen(
+                    confirmed -> {
+                        if (confirmed) {
+                            PeerPulsarConfig.get().setNetworkTestConsent(true);
+                        }
+                        if (this.minecraft != null) {
+                            this.minecraft.setScreenAndShow(this);
+                        }
+                        if (confirmed) {
+                            proceedConnect(target);
+                        }
+                    },
+                    Component.translatable("screen.peerpulsar.join.consent_udp_title").withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD),
+                    Component.translatable("screen.peerpulsar.join.consent_udp_body", NetworkEndpoints.DEFAULT_SIGNALING_URL),
+                    Component.translatable("screen.peerpulsar.join.consent_udp_confirm"),
+                    Component.translatable("gui.cancel")
+            ));
+            return;
+        }
+
+        proceedConnect(target);
+    }
+
+    private void proceedConnect(RoomCodeHelper.ConnectionTarget target) {
+        if (target == null || this.minecraft == null || this.isPunching) return;
+
         if (target.isUdpHolePunch()) {
             this.isPunching = true;
             this.activeOpTargetLabel = target.host();
@@ -328,17 +376,6 @@ public class P2PJoinScreen extends Screen {
         int panelLeft = cx - panelW / 2;
         int cardY = computeCardY();
 
-        this.advancedButton = new NeonButton(
-                panelLeft + panelW - 66, cardY - 35, 66, 16,
-                Component.translatable("screen.peerpulsar.btn_advanced"),
-                NeonTheme.VIOLET,
-                () -> {
-                    if (this.minecraft != null) {
-                        this.minecraft.setScreenAndShow(new P2PAdvancedScreen(this));
-                    }
-                }
-        );
-        this.addRenderableWidget(advancedButton);
         int slideOffset = Math.round((1.0f - enterT) * -10.0f);
         RoomCodeHelper.ConnectionTarget currentTarget = this.parsedTarget;
         int cardAccent = online ? NeonTheme.EMERALD : (currentTarget != null ? NeonTheme.CYAN : NeonTheme.VIOLET);
@@ -418,17 +455,24 @@ public class P2PJoinScreen extends Screen {
             String targetLabel = currentTarget.isUdpHolePunch()
                     ? tr("screen.peerpulsar.join.resolved_udp", currentTarget.host())
                     : tr("screen.peerpulsar.join.resolved", RoomCodeHelper.formatHostPort(currentTarget.host(), currentTarget.port()));
-            String hintLabel = currentTarget.hasRoomKey()
-                    ? tr(currentTarget.isUdpHolePunch()
-                            ? "screen.peerpulsar.join.resolved_udp_key_hint"
-                            : "screen.peerpulsar.join.resolved_key_hint")
-                    : (currentTarget.isUdpHolePunch()
-                            ? tr("screen.peerpulsar.join.resolved_udp_hint")
-                            : tr("screen.peerpulsar.join.resolved_hint"));
+            String hintLabel;
+            int hintColor = NeonTheme.TEXT_SECONDARY;
+            if (currentTarget.isUdpHolePunch() && currentTarget.hasSignalingServer()) {
+                hintLabel = tr("screen.peerpulsar.join.custom_signal_hint", currentTarget.signalingServer());
+                hintColor = NeonTheme.withAlpha(NeonTheme.AMBER, 255);
+            } else if (currentTarget.hasRoomKey()) {
+                hintLabel = tr(currentTarget.isUdpHolePunch()
+                        ? "screen.peerpulsar.join.resolved_udp_key_hint"
+                        : "screen.peerpulsar.join.resolved_key_hint");
+            } else {
+                hintLabel = tr(currentTarget.isUdpHolePunch()
+                        ? "screen.peerpulsar.join.resolved_udp_hint"
+                        : "screen.peerpulsar.join.resolved_hint");
+            }
             graphics.text(this.font, truncatePlain(targetLabel, maxTeleW),
                     panelLeft + 20, teleY + 8, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
             graphics.text(this.font, truncatePlain(hintLabel, maxTeleW),
-                    panelLeft + 20, teleY + 21, NeonTheme.TEXT_SECONDARY, false);
+                    panelLeft + 20, teleY + 21, hintColor, false);
         } else {
             graphics.text(this.font, truncatePlain(tr("screen.peerpulsar.join.status_idle"), maxTeleW),
                     panelLeft + 20, teleY + 8, NeonTheme.TEXT_MUTED, false);

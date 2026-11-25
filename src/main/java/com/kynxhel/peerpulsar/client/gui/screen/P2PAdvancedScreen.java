@@ -24,14 +24,8 @@ import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.storage.LevelResource;
 
-import javax.swing.JFileChooser;
-import javax.swing.SwingUtilities;
-import javax.swing.filechooser.FileNameExtensionFilter;
-import java.awt.GraphicsEnvironment;
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.atomic.AtomicReference;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -681,7 +675,10 @@ public class P2PAdvancedScreen extends Screen {
         CompletableFuture.runAsync(() -> {
             try {
                 Path source = chooseOpenPath();
-                if (source == null) return;
+                if (source == null) {
+                    runOnClient(() -> showToast(tr("screen.peerpulsar.identity.toast_import_not_found"), NeonTheme.AMBER));
+                    return;
+                }
                 ClientIdentity imported = ClientIdentity.importFrom(source);
                 runOnClient(() -> showToast(tr("screen.peerpulsar.identity.toast_imported", imported.shortFingerprint()), NeonTheme.EMERALD));
             } catch (Exception e) {
@@ -691,41 +688,17 @@ public class P2PAdvancedScreen extends Screen {
     }
 
     private Path chooseSavePath() {
-        if (!GraphicsEnvironment.isHeadless()) {
-            try {
-                AtomicReference<Path> selected = new AtomicReference<>();
-                SwingUtilities.invokeAndWait(() -> {
-                    JFileChooser chooser = new JFileChooser();
-                    chooser.setDialogTitle("Export PeerPulsar Identity");
-                    chooser.setSelectedFile(new File("peerpulsar-identity.json"));
-                    chooser.setFileFilter(new FileNameExtensionFilter("JSON files (*.json)", "json"));
-                    if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION && chooser.getSelectedFile() != null) {
-                        selected.set(chooser.getSelectedFile().toPath());
-                    }
-                });
-                return selected.get();
-            } catch (Throwable ignored) {}
-        }
         return Minecraft.getInstance().gameDirectory.toPath().resolve("peerpulsar-identity-backup.json");
     }
 
     private Path chooseOpenPath() {
-        if (!GraphicsEnvironment.isHeadless()) {
-            try {
-                AtomicReference<Path> selected = new AtomicReference<>();
-                SwingUtilities.invokeAndWait(() -> {
-                    JFileChooser chooser = new JFileChooser();
-                    chooser.setDialogTitle("Import PeerPulsar Identity");
-                    chooser.setFileFilter(new FileNameExtensionFilter("JSON files (*.json)", "json"));
-                    if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION && chooser.getSelectedFile() != null) {
-                        selected.set(chooser.getSelectedFile().toPath());
-                    }
-                });
-                return selected.get();
-            } catch (Throwable ignored) {}
+        Path gameDir = Minecraft.getInstance().gameDirectory.toPath();
+        Path backup = gameDir.resolve("peerpulsar-identity-backup.json");
+        if (Files.isRegularFile(backup)) {
+            return backup;
         }
-        Path fallback = Minecraft.getInstance().gameDirectory.toPath().resolve("peerpulsar-identity-backup.json");
-        return Files.isRegularFile(fallback) ? fallback : null;
+        Path direct = gameDir.resolve("peerpulsar-identity.json");
+        return Files.isRegularFile(direct) ? direct : null;
     }
 
     private void runOnClient(Runnable r) {

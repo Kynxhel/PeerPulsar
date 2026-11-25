@@ -5,7 +5,7 @@
 **PeerPulsar** is an open-source, peer-to-peer Minecraft Fabric mod. It does **not** require accounts, does **not** include telemetry or analytics, and does **not** operate any central data-collection servers.
 
 ## 1. When External Services Are Contacted
-PeerPulsar **never** contacts external servers on game startup, on the title screen, or when hosting in **Local LAN** mode. External services are contacted **only** after you explicitly opt in to **Network Diagnostics / Test All** (saved in `config/peerpulsar.json`) or start/join an internet P2P session:
+PeerPulsar **never** contacts external servers on game startup, on the title screen, or when hosting in **Local LAN** mode (**Local LAN makes zero external lookups**). External services are contacted **only** after you explicitly opt in to **Network Diagnostics / Test All** (saved in `config/peerpulsar.json`) or start/join an internet P2P session:
 
 | Service | Purpose | When Contacted |
 | :--- | :--- | :--- |
@@ -14,7 +14,14 @@ PeerPulsar **never** contacts external servers on game startup, on the title scr
 | `ntfy.sh` (or custom HTTPS ntfy server) | Peer endpoint signaling for UDP Hole Punching. Topic names are SHA-256 hashed from the room code and all messages are end-to-end encrypted with AES-256-GCM. | Opt-in Test All; hosting or joining via **UDP Hole Punch** |
 | `bore.pub:7835` (or custom bore server) | TCP tunnel relay fallback for Symmetric NAT / strict firewalls | Opt-in Network Test / Test All; **Tunnel Relay** hosting |
 
-`bore.pub` and `ntfy.sh` are free third-party community services unrelated to the mod author, with no uptime or SLA guarantee. You can add or self-host your own relay or signaling server in the **Advanced** menu.
+`bore.pub`, `ntfy.sh`, and the listed STUN / IP echo endpoints are **optional suggested community defaults** unrelated to the mod author, with no uptime or SLA guarantee. You can freely change, disable, or replace any of them with self-hosted or custom servers in **Advanced → Network Services**.
+
+### Join-Side UDP Consent & Custom Signaling Confirmation
+- Joining via **UDP Hole Punch** requires your explicit one-time network consent (matching the host-side opt-in) before contacting STUN or signaling endpoints.
+- If a UDP room code specifies a custom signaling server URL, PeerPulsar validates that the URL resolves only to public network addresses (blocking loopback, link-local, and private/internal addresses) and prompts you with an explicit confirmation showing the custom signaling domain before connecting.
+
+### Mojang Hybrid Verification & Token Safety
+When Offline LAN Auth is enabled, players with valid Mojang accounts can prove ownership of their Mojang profile via hybrid verification. Your Mojang session token is **never** sent to the host or any third-party server; instead, the client and host only contact Mojang's official session service (`sessionserver.mojang.com`) using a locally derived, domain-separated challenge ID.
 
 During the opt-in **Network Test**, PeerPulsar also sends local SSDP multicast packets to your router and briefly tests a temporary 60-second UPnP port mapping (immediately deleted after verification).
 

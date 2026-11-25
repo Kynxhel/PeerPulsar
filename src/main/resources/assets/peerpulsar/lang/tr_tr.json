@@ -117,6 +117,13 @@
   "screen.peerpulsar.join.resolved_udp": "UDP Hole Punch Odası: %s",
   "screen.peerpulsar.join.resolved_udp_hint": "CGNAT aşan doğrudan UDP P2P — Dünyaya Katıl'a tıkla.",
   "screen.peerpulsar.join.resolved_udp_key_hint": "Oda Anahtarı algılandı • Doğrudan UDP P2P — Dünyaya Katıl.",
+  "screen.peerpulsar.join.custom_signal_hint": "Özel signaling: %s",
+  "screen.peerpulsar.join.warn_custom_signal_title": "Özel Signaling Sunucusu",
+  "screen.peerpulsar.join.warn_custom_signal_body": "Bu UDP oda kodu varsayılan servis yerine özel bir signaling sunucusu (%s) kullanıyor. P2P bağlantısını kurmak için genel IP adresiniz ve oturum bilgileri bu sunucuya gönderilecektir. Yalnızca bu davete güveniyorsanız devam edin.",
+  "screen.peerpulsar.join.warn_custom_signal_confirm": "Güven ve Katıl",
+  "screen.peerpulsar.join.consent_udp_title": "UDP P2P Bağlantı Onayı",
+  "screen.peerpulsar.join.consent_udp_body": "UDP oda kodu ile katılmak, uç noktaları paylaşmak ve NAT delmek için yapılandırılmış STUN sunucularına ve signaling sunucusuna (%s) bağlanır. Genel IP adresiniz signaling kanalı ve host ile paylaşılır.",
+  "screen.peerpulsar.join.consent_udp_confirm": "Onayla ve Katıl",
   "screen.peerpulsar.join.resolved_key_hint": "Oda Anahtarı algılandı • Bağlanmaya hazır.",
   "screen.peerpulsar.join.toast_punching": "STUN uç noktaları paylaşılıyor ve NAT deliniyor...",
   "screen.peerpulsar.join.toast_punch_fail": "UDP Hole Punch başarısız: %s",
@@ -190,5 +197,6 @@
   "screen.peerpulsar.identity.warning_private": "Bu dosyayı gizli tutun. Paylaşırsanız offline kimliğiniz taklit edilebilir.",
   "screen.peerpulsar.identity.toast_exported": "Kimlik dışa aktarıldı: %s (bu dosyayı gizli tutun!).",
   "screen.peerpulsar.identity.toast_imported": "Kimlik içe aktarıldı! Parmak izi: %s",
+  "screen.peerpulsar.identity.toast_import_not_found": "Yedek bulunamadı. peerpulsar-identity-backup.json dosyasını Minecraft klasörüne koyun.",
   "screen.peerpulsar.identity.toast_recreated": "Yeni Ed25519 kimliği oluşturuldu."
 }

@@ -6,6 +6,7 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
@@ -110,6 +111,136 @@ public final class NetworkEndpoints {
 
     public static boolean isValidHttpsUrl(String raw) {
         return normalizeHttpsUrl(raw) != null;
+    }
+
+    /**
+     * Purely lexical check (no DNS) that rejects null/blank hosts, local/internal domains,
+     * single-label hostnames, and non-public IPv4/IPv6 literals.
+     */
+    public static boolean isNonPublicHostLiteralOrName(String host) {
+        if (host == null) return true;
+        String trimmed = host.trim();
+        if (trimmed.isEmpty()) return true;
+
+        boolean bracketed = trimmed.startsWith("[") && trimmed.endsWith("]") && trimmed.length() > 2;
+        String unbracketed = bracketed ? trimmed.substring(1, trimmed.length() - 1) : trimmed;
+
+        // Zone IDs (e.g. fe80::1%eth0) always denote a scoped/non-public address
+        if (unbracketed.indexOf('%') >= 0) {
+            return true;
+        }
+
+        try {
+            InetAddress literal = InetAddress.ofLiteral(unbracketed);
+            return isNonPublicAddress(literal);
+        } catch (IllegalArgumentException ignored) {
+            if (bracketed) {
+                return true;
+            }
+        }
+
+        String lower = unbracketed.toLowerCase(Locale.ROOT);
+        while (lower.endsWith(".")) {
+            lower = lower.substring(0, lower.length() - 1);
+        }
+        if (lower.isEmpty()) return true;
+
+        if (lower.equals("localhost")
+                || lower.endsWith(".localhost")
+                || lower.endsWith(".local")
+                || lower.endsWith(".internal")
+                || lower.endsWith(".lan")
+                || lower.endsWith(".home.arpa")) {
+            return true;
+        }
+
+        return !lower.contains(".");
+    }
+
+    /**
+     * Returns true if {@code addr} is null or falls in any non-public range
+     * (any-local, loopback, link-local, site-local/RFC1918, multicast, CGNAT 100.64.0.0/10,
+     * IPv6 ULA fc00::/7, or IPv4-mapped IPv6 wrapping a non-public IPv4 address).
+     */
+    public static boolean isNonPublicAddress(InetAddress addr) {
+        if (addr == null) return true;
+        if (addr.isAnyLocalAddress()
+                || addr.isLoopbackAddress()
+                || addr.isLinkLocalAddress()
+                || addr.isSiteLocalAddress()
+                || addr.isMulticastAddress()) {
+            return true;
+        }
+        byte[] b = addr.getAddress();
+        if (b.length == 4) {
+            int b0 = b[0] & 0xFF;
+            int b1 = b[1] & 0xFF;
+            // CGNAT 100.64.0.0/10
+            if (b0 == 100 && b1 >= 64 && b1 <= 127) {
+                return true;
+            }
+            // "This" network 0.0.0.0/8
+            if (b0 == 0) {
+                return true;
+            }
+        } else if (b.length == 16) {
+            // IPv6 ULA fc00::/7
+            if ((b[0] & 0xFE) == 0xFC) {
+                return true;
+            }
+            // IPv4-mapped IPv6 ::ffff:0:0/96
+            if (isIpv4MappedIpv6(b)) {
+                try {
+                    byte[] v4 = new byte[4];
+                    System.arraycopy(b, 12, v4, 0, 4);
+                    return isNonPublicAddress(InetAddress.getByAddress(v4));
+                } catch (Exception ignored) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean isIpv4MappedIpv6(byte[] b) {
+        for (int i = 0; i < 10; i++) {
+            if (b[i] != 0) return false;
+        }
+        return b[10] == (byte) 0xFF && b[11] == (byte) 0xFF;
+    }
+
+    /**
+     * Normalizes an HTTPS URL and rejects non-public hosts/literals (SSRF defense).
+     */
+    public static String normalizePublicHttpsUrl(String raw) {
+        String norm = normalizeHttpsUrl(raw);
+        if (norm == null) return null;
+        String host = URI.create(norm).getHost();
+        return isNonPublicHostLiteralOrName(host) ? null : norm;
+    }
+
+    /**
+     * Runtime DNS-rebinding check: ensures the host is lexically public and every resolved
+     * address is a public IP address.
+     */
+    public static boolean resolvesToPublicAddress(String host) {
+        if (isNonPublicHostLiteralOrName(host)) return false;
+        String trimmed = host.trim();
+        if (trimmed.startsWith("[") && trimmed.endsWith("]") && trimmed.length() > 2) {
+            trimmed = trimmed.substring(1, trimmed.length() - 1);
+        }
+        try {
+            InetAddress[] addrs = InetAddress.getAllByName(trimmed);
+            if (addrs == null || addrs.length == 0) return false;
+            for (InetAddress addr : addrs) {
+                if (isNonPublicAddress(addr)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public static List<HostPort> getOrderedRelays(PeerPulsarConfig cfg) {

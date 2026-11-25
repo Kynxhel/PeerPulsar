@@ -12,7 +12,7 @@
 
 ## Quick Start
 
-1. **Install:** Drop `peerpulsar-3.2.0+26.3.jar` and Fabric API (`>=0.165.2+26.3`) into `.minecraft/mods/`.
+1. **Install (Both Host & Joiners):** **Both the host and joining players need PeerPulsar installed.** Drop `peerpulsar-*.jar` and Fabric API (`>=0.165.2+26.3`) into `.minecraft/mods/`.
 2. **Host:** Open any singleplayer world, press `Esc`, click **Start P2P**, and copy the Room Code or Discord invite.
 3. **Join:** Your friend opens **Join P2P**, pastes the Room Code (or entire Discord invite), and joins immediately.
 
@@ -36,22 +36,22 @@ Click **Test** on the **Start P2P** screen (after reviewing the one-time consent
 - **New Code & Kick:** Rotate the `#KEY` mid-session with **New Code** without kicking current players or restarting the tunnel, and kick unwanted players from the live player list.
 - **Optional Join Approval (Off by Default):** Enable **Join Approval** on the Host screen to review incoming join requests in-game with `[Accept]`, `[Always]`, or `[Deny]`, matched by both nickname and Ed25519 device fingerprint.
 - **Guest Commands Control:** Even when Cheats are enabled for the host, joiners do not receive command/operator permissions unless **Guest Commands** is explicitly enabled in **Advanced → Security**.
-- **Optional Offline LAN Auth:** Optional Offline LAN Auth lets players with offline accounts join, protected by an embedded room key, optional join approval, and name locks. When enabled, players with valid Mojang sessions keep their Mojang UUID/skin, while offline players receive a deterministic Ed25519-key UUID with safe backup-first legacy data migration and identity export/import.
+- **Optional Offline LAN Auth:** Optional Offline LAN Auth lets players with offline accounts join, protected by an embedded room key, optional join approval, and name locks. When enabled, players with valid Mojang sessions keep their Mojang UUID/skin via token-safe local hybrid challenge verification (invoking only Mojang's official session service with a locally derived, domain-separated challenge ID—Mojang session tokens are never shared with hosts or third parties), while offline players receive a deterministic Ed25519-key UUID with safe backup-first legacy data migration and identity export/import.
 
 ### Configurable Network Services (Advanced Menu)
 Open **⚙ Advanced** from the Host or Join screen to inspect or customize **Tunnel Relay**, **UDP Signaling**, and **STUN / Public IP Discovery** endpoints:
 - Default mode is **Auto (Recommended)** with automatic failover.
-- Run **Test All** (opt-in) to check latency, or add custom self-hosted endpoints.
-- Custom UDP signaling servers are automatically embedded in the room code so joiners connect without extra setup.
+- Run **Test All** (opt-in) to check latency, or replace the optional suggested community defaults with custom self-hosted endpoints.
+- Custom UDP signaling servers are automatically embedded in the room code; joining a room with a custom signaling server validates that the URL is public-only and prompts the joiner for explicit confirmation showing the domain.
 
 ---
 
 ## External Services & Privacy Disclosure
 
-PeerPulsar collects **no telemetry, analytics, or user accounts**. External services are contacted **only** after you opt in to **Network Diagnostics** / **Test All** or start/join an internet P2P session (Local LAN mode makes zero external requests):
+PeerPulsar collects **no telemetry, analytics, or user accounts**. External services are contacted **only** after you opt in to **Network Diagnostics** / **Test All** or start/join an internet P2P session (**Local LAN** mode makes zero external lookups):
 
-- **STUN / Public IP Discovery:** `stun.l.google.com:19302`, `stun1.l.google.com:19302`, `stun.cloudflare.com:3478`, `stun.nextcloud.com:443`, and HTTPS IP echo endpoints (`api.ipify.org`, `checkip.amazonaws.com`, `icanhazip.com`).
-- **Community Relay & Signaling:** `bore.pub` and `ntfy.sh` are free third-party community services unrelated to the mod author, with no uptime or SLA guarantee. You can add or self-host your own server in the **Advanced** menu (for example, `bore server` from `github.com/ekzhang/bore`).
+- **Optional Suggested Defaults (`bore.pub`, `ntfy.sh`, STUN & IP Echo):** `stun.l.google.com:19302`, `stun1.l.google.com:19302`, `stun.cloudflare.com:3478`, `stun.nextcloud.com:443`, HTTPS IP echo endpoints (`api.ipify.org`, `checkip.amazonaws.com`, `icanhazip.com`), `bore.pub`, and `ntfy.sh` are **optional suggested community defaults** unrelated to the mod author, with no uptime or SLA guarantee. You can freely change or self-host any of these endpoints in **⚙ Advanced → Network Services** (for example, `bore server` from `github.com/ekzhang/bore`).
+- **Join-Side Confirmation & Token Safety:** Joining via UDP Hole Punch requires network consent, custom signaling servers require explicit domain confirmation and public-only URL validation, and Mojang session tokens are never sent to hosts or third-party servers.
 - **Room Code IP Notice:** Direct P2P (UPnP) and Local LAN room codes encode your IP address and port (XOR/Base64url, not encrypted). Share them only with people you trust, or use **Tunnel Relay** / **UDP Punch** to avoid embedding your IP in the code.
 
 See [PRIVACY.md](PRIVACY.md) for full details.
@@ -66,7 +66,7 @@ cd PeerPulsar
 ./gradlew build test
 ```
 
-The compiled mod JAR will be located in `build/libs/peerpulsar-3.2.0+26.3.jar`.
+The compiled mod JAR will be located in `build/libs/peerpulsar-*.jar`.
 
 ---
 

@@ -203,7 +203,7 @@ public class RoomCodeHelper {
                 String candidateUrl = decodedHost.toLowerCase(Locale.ROOT).startsWith("https://")
                         ? decodedHost
                         : ("https://" + decodedHost);
-                signalingServer = NetworkEndpoints.normalizeHttpsUrl(candidateUrl);
+                signalingServer = NetworkEndpoints.normalizePublicHttpsUrl(candidateUrl);
                 if (signalingServer == null) {
                     return null;
                 }

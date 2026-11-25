@@ -106,6 +106,23 @@ public final class OfflineAuth {
         return new BigInteger(twenty).toString(16);
     }
 
+    /**
+     * Locally derives and verifies the hybrid Mojang serverId from the login challenge nonce.
+     * Rejects short/missing nonces and any host-provided serverId that does not match the
+     * domain-separated local derivation, preventing cross-server session relay attacks.
+     */
+    public static String resolveVerifiedHybridServerId(byte[] nonce, String serverProvidedId) {
+        if (nonce == null || nonce.length < 16) {
+            return null;
+        }
+        String expected = computeHybridServerId(nonce);
+        if (serverProvidedId != null && !serverProvidedId.isEmpty() && !expected.equals(serverProvidedId)) {
+            PeerPulsar.LOGGER.warn("[PeerPulsar-Auth] Rejected mismatched hybridServerId from host");
+            return null;
+        }
+        return expected;
+    }
+
     public static void registerServerSide() {
         ServerLoginConnectionEvents.QUERY_START.register((handler, server, sender, synchronizer) -> {
             HostSecurityContext ctx = hostContext;

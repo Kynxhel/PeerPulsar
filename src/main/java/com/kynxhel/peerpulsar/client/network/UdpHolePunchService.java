@@ -331,7 +331,8 @@ public class UdpHolePunchService {
 
                             if (peerPort < 1 || peerPort > 65535 || peerId.length() > 32 || !isNumericIpLiteral(peerIp)) continue;
                             InetAddress parsedIp = InetAddress.ofLiteral(peerIp);
-                            if (parsedIp.isLoopbackAddress() || parsedIp.isMulticastAddress() || parsedIp.isAnyLocalAddress()) {
+                            if (parsedIp.isLoopbackAddress() || parsedIp.isMulticastAddress()
+                                    || parsedIp.isAnyLocalAddress() || parsedIp.isLinkLocalAddress()) {
                                 continue;
                             }
 
@@ -568,9 +569,13 @@ public class UdpHolePunchService {
                 }
                 String signalingBase = NetworkEndpoints.DEFAULT_SIGNALING_URL;
                 if (overrideSignalingUrl != null && !overrideSignalingUrl.isBlank()) {
-                    String norm = NetworkEndpoints.normalizeHttpsUrl(overrideSignalingUrl);
+                    String norm = NetworkEndpoints.normalizePublicHttpsUrl(overrideSignalingUrl);
                     if (norm == null) {
-                        return new ClientProxyResult(false, -1, "Invalid signaling URL in room code");
+                        return new ClientProxyResult(false, -1, "Invalid or non-public signaling URL in room code");
+                    }
+                    String signalingHost = URI.create(norm).getHost();
+                    if (!NetworkEndpoints.resolvesToPublicAddress(signalingHost)) {
+                        return new ClientProxyResult(false, -1, "Custom signaling server resolves to a private/local address");
                     }
                     signalingBase = norm;
                 }
@@ -635,7 +640,8 @@ public class UdpHolePunchService {
                                     int hPort = payload.get("port").getAsInt();
                                     if (hPort >= 1 && hPort <= 65535 && isNumericIpLiteral(hIp)) {
                                         InetAddress hostIpAddr = InetAddress.ofLiteral(hIp);
-                                        if (!hostIpAddr.isLoopbackAddress() && !hostIpAddr.isMulticastAddress() && !hostIpAddr.isAnyLocalAddress()) {
+                                        if (!hostIpAddr.isLoopbackAddress() && !hostIpAddr.isMulticastAddress()
+                                                && !hostIpAddr.isAnyLocalAddress() && !hostIpAddr.isLinkLocalAddress()) {
                                             hostAddrFuture.complete(new InetSocketAddress(hostIpAddr, hPort));
                                             break;
                                         }
