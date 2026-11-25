@@ -6,12 +6,11 @@ import com.kynxhel.peerpulsar.config.PeerPulsarConfig;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.DatagramSocket;
-import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import javax.net.ssl.HttpsURLConnection;
 
 /**
  * Diagnoses the host's internet connection, NAT/CGNAT status, UPnP capability,
@@ -240,11 +239,9 @@ public class NetworkDiagnosticsService {
 
     private static String queryHttpsPublicIp() {
         for (String endpoint : NetworkEndpoints.getOrderedIpEcho(PeerPulsarConfig.get())) {
-            HttpURLConnection conn = null;
+            HttpsURLConnection conn = null;
             try {
-                conn = (HttpURLConnection) URI.create(endpoint).toURL().openConnection();
-                conn.setConnectTimeout(2500);
-                conn.setReadTimeout(2500);
+                conn = NetworkEndpoints.openPinnedPublicHttpsConnection(endpoint, 2500, 2500);
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                     String ip = reader.readLine();
                     if (ip != null && !ip.trim().isEmpty() && ip.trim().length() <= 45) {

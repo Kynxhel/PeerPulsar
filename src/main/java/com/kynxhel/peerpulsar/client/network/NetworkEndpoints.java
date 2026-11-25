@@ -3,15 +3,18 @@ package com.kynxhel.peerpulsar.client.network;
 import com.kynxhel.peerpulsar.config.PeerPulsarConfig;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.DatagramSocket;
-import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketAddress;
 import java.net.URI;
+import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -19,6 +22,8 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLSocketFactory;
 
 /**
  * Centralized, configurable registry and validator for external network endpoints
@@ -243,6 +248,175 @@ public final class NetworkEndpoints {
         }
     }
 
+    private static String stripBrackets(String s) {
+        if (s != null && s.startsWith("[") && s.endsWith("]") && s.length() > 2) {
+            return s.substring(1, s.length() - 1);
+        }
+        return s;
+    }
+
+    /**
+     * Opens an {@link HttpsURLConnection} with redirects disabled and DNS pinned to verified
+     * public IP addresses to prevent HTTP redirect SSRF and DNS rebinding attacks.
+     */
+    public static HttpsURLConnection openPinnedPublicHttpsConnection(String fullUrl, int connectTimeoutMs, int readTimeoutMs) throws IOException {
+        if (fullUrl == null || fullUrl.isBlank()) {
+            throw new IOException("Blank HTTPS URL");
+        }
+        final URI uri;
+        try {
+            uri = URI.create(fullUrl.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IOException("Invalid HTTPS URL", e);
+        }
+        if (!"https".equalsIgnoreCase(uri.getScheme())) {
+            throw new IOException("Only HTTPS URLs are allowed");
+        }
+        if (uri.getRawUserInfo() != null) {
+            throw new IOException("URL userinfo is not allowed");
+        }
+        String rawHost = uri.getHost();
+        if (isNonPublicHostLiteralOrName(rawHost)) {
+            throw new IOException("Rejected non-public host: " + rawHost);
+        }
+        final String host = stripBrackets(rawHost.trim());
+        final InetAddress[] pinnedAddrs = InetAddress.getAllByName(host);
+        if (pinnedAddrs == null || pinnedAddrs.length == 0) {
+            throw new IOException("Failed to resolve host: " + host);
+        }
+        for (InetAddress addr : pinnedAddrs) {
+            if (isNonPublicAddress(addr)) {
+                throw new IOException("Rejected non-public resolved address for host " + host);
+            }
+        }
+
+        URLConnection rawConn = uri.toURL().openConnection();
+        if (!(rawConn instanceof HttpsURLConnection conn)) {
+            throw new IOException("Expected HttpsURLConnection");
+        }
+        conn.setInstanceFollowRedirects(false);
+        conn.setConnectTimeout(connectTimeoutMs);
+        conn.setReadTimeout(readTimeoutMs);
+
+        final SSLSocketFactory delegate = HttpsURLConnection.getDefaultSSLSocketFactory();
+        final Set<InetAddress> pinnedSet = new LinkedHashSet<>(Arrays.asList(pinnedAddrs));
+        conn.setSSLSocketFactory(new SSLSocketFactory() {
+            private Socket connectPinnedRawSocket(InetAddress preferredAddr, InetAddress localAddr, int localPort, int port) throws IOException {
+                IOException lastErr = null;
+                List<InetAddress> candidates = new ArrayList<>(pinnedAddrs.length);
+                if (preferredAddr != null) {
+                    if (isNonPublicAddress(preferredAddr) || !pinnedSet.contains(preferredAddr)) {
+                        throw new IOException("Rejected unpinned or non-public target address");
+                    }
+                    candidates.add(preferredAddr);
+                } else {
+                    candidates.addAll(Arrays.asList(pinnedAddrs));
+                }
+                for (InetAddress target : candidates) {
+                    if (isNonPublicAddress(target)) {
+                        throw new IOException("Rejected non-public target address");
+                    }
+                    Socket raw = new Socket();
+                    try {
+                        if (localAddr != null) {
+                            raw.bind(new InetSocketAddress(localAddr, localPort));
+                        }
+                        raw.connect(new InetSocketAddress(target, port), connectTimeoutMs);
+                        return raw;
+                    } catch (IOException e) {
+                        lastErr = e;
+                        try {
+                            raw.close();
+                        } catch (IOException ignored) {
+                        }
+                    }
+                }
+                throw lastErr != null ? lastErr : new IOException("Failed to connect to pinned address for " + host);
+            }
+
+            private void validateHostArg(String reqHost) throws IOException {
+                if (isNonPublicHostLiteralOrName(reqHost)) {
+                    throw new IOException("Rejected non-public host: " + reqHost);
+                }
+                String normalized = stripBrackets(reqHost.trim());
+                if (!normalized.equalsIgnoreCase(host)) {
+                    throw new IOException("Unexpected host mismatch: " + reqHost);
+                }
+            }
+
+            @Override
+            public String[] getDefaultCipherSuites() {
+                return delegate.getDefaultCipherSuites();
+            }
+
+            @Override
+            public String[] getSupportedCipherSuites() {
+                return delegate.getSupportedCipherSuites();
+            }
+
+            @Override
+            public Socket createSocket() throws IOException {
+                return new Socket() {
+                    @Override
+                    public void connect(SocketAddress endpoint, int timeout) throws IOException {
+                        if (!(endpoint instanceof InetSocketAddress isa)) {
+                            throw new IOException("Unsupported socket address");
+                        }
+                        InetAddress resolved = isa.getAddress();
+                        if (resolved != null && isNonPublicAddress(resolved)) {
+                            throw new IOException("Rejected non-public target address");
+                        }
+                        InetAddress target = (resolved != null && pinnedSet.contains(resolved))
+                                ? resolved
+                                : pinnedAddrs[0];
+                        if (isNonPublicAddress(target)) {
+                            throw new IOException("Rejected non-public pinned address");
+                        }
+                        int effTimeout = timeout > 0 ? timeout : connectTimeoutMs;
+                        super.connect(new InetSocketAddress(target, isa.getPort()), effTimeout);
+                    }
+                };
+            }
+
+            @Override
+            public Socket createSocket(Socket s, String reqHost, int port, boolean autoClose) throws IOException {
+                validateHostArg(reqHost);
+                if (s != null && s.getInetAddress() != null
+                        && (isNonPublicAddress(s.getInetAddress()) || !pinnedSet.contains(s.getInetAddress()))) {
+                    throw new IOException("Rejected socket connected to unpinned or non-public address");
+                }
+                return delegate.createSocket(s, host, port, autoClose);
+            }
+
+            @Override
+            public Socket createSocket(String reqHost, int port) throws IOException {
+                validateHostArg(reqHost);
+                Socket raw = connectPinnedRawSocket(null, null, 0, port);
+                return delegate.createSocket(raw, host, port, true);
+            }
+
+            @Override
+            public Socket createSocket(String reqHost, int port, InetAddress localHost, int localPort) throws IOException {
+                validateHostArg(reqHost);
+                Socket raw = connectPinnedRawSocket(null, localHost, localPort, port);
+                return delegate.createSocket(raw, host, port, true);
+            }
+
+            @Override
+            public Socket createSocket(InetAddress address, int port) throws IOException {
+                Socket raw = connectPinnedRawSocket(address, null, 0, port);
+                return delegate.createSocket(raw, host, port, true);
+            }
+
+            @Override
+            public Socket createSocket(InetAddress address, int port, InetAddress localAddress, int localPort) throws IOException {
+                Socket raw = connectPinnedRawSocket(address, localAddress, localPort, port);
+                return delegate.createSocket(raw, host, port, true);
+            }
+        });
+        return conn;
+    }
+
     public static List<HostPort> getOrderedRelays(PeerPulsarConfig cfg) {
         return getOrderedHostPorts(DEFAULT_RELAYS, cfg != null ? cfg.getRelaySection() : null);
     }
@@ -318,18 +492,18 @@ public final class NetworkEndpoints {
     private static List<String> getOrderedUrls(List<String> defaults, PeerPulsarConfig.ServiceSection section) {
         Set<String> all = new LinkedHashSet<>();
         for (String d : defaults) {
-            String norm = normalizeHttpsUrl(d);
+            String norm = normalizePublicHttpsUrl(d);
             if (norm != null) all.add(norm);
         }
         if (section != null) {
             for (String c : section.getCustom()) {
-                String norm = normalizeHttpsUrl(c);
+                String norm = normalizePublicHttpsUrl(c);
                 if (norm != null) all.add(norm);
             }
         }
         List<String> result = new ArrayList<>();
         if (section != null && PeerPulsarConfig.MODE_MANUAL.equals(section.getMode()) && section.getSelected() != null) {
-            String sel = normalizeHttpsUrl(section.getSelected());
+            String sel = normalizePublicHttpsUrl(section.getSelected());
             if (sel != null) {
                 result.add(sel);
             }
@@ -376,15 +550,13 @@ public final class NetworkEndpoints {
     }
 
     public static long pingHttpsMs(String httpsUrl) {
-        String norm = normalizeHttpsUrl(httpsUrl);
+        String norm = normalizePublicHttpsUrl(httpsUrl);
         if (norm == null) return -1;
-        HttpURLConnection conn = null;
+        HttpsURLConnection conn = null;
         long start = System.currentTimeMillis();
         try {
-            conn = (HttpURLConnection) URI.create(norm + "/").toURL().openConnection();
+            conn = openPinnedPublicHttpsConnection(norm + "/", 3000, 3000);
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(3000);
-            conn.setReadTimeout(3000);
             int code = conn.getResponseCode();
             return (code >= 200 && code < 400) ? Math.max(1L, System.currentTimeMillis() - start) : -1;
         } catch (Exception e) {
@@ -395,14 +567,12 @@ public final class NetworkEndpoints {
     }
 
     public static long pingIpEchoMs(String httpsUrl) {
-        String norm = normalizeHttpsUrl(httpsUrl);
+        String norm = normalizePublicHttpsUrl(httpsUrl);
         if (norm == null) return -1;
-        HttpURLConnection conn = null;
+        HttpsURLConnection conn = null;
         long start = System.currentTimeMillis();
         try {
-            conn = (HttpURLConnection) URI.create(norm).toURL().openConnection();
-            conn.setConnectTimeout(2500);
-            conn.setReadTimeout(2500);
+            conn = openPinnedPublicHttpsConnection(norm, 2500, 2500);
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) return -1;
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {

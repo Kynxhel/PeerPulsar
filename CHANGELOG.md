@@ -2,6 +2,12 @@
 
 > **Project History:** Originally created as *FabricP2PMod*, temporarily rebranded to *Atarca* in v3.0.0 (when Cloud Sync / Google OAuth was removed), and renamed to **PeerPulsar** in v3.1.0.
 
+## v3.2.2+26.3
+- **End-to-End Encrypted Offline LAN Auth & Zero Session Token Access:** Enabled Minecraft's native RSA + AES-CFB8 transport encryption (`shouldAuthenticate = false`) in Offline LAN Auth, channel-bound via SHA-256 host key hash into the `#KEY` HMAC and Ed25519 signature to protect gameplay traffic against MITM and eavesdropping even over `bore.pub` or UDP Hole Punch, and removed hybrid Mojang session checks so PeerPulsar never reads `User.getAccessToken()` or contacts Mojang session servers on behalf of clients.
+- **Named First-Use Consent & Storefront Disclosures:** Updated host diagnostics, UDP join consent, custom signaling warning, Offline LAN Auth warning, and HTTPS error strings (`en_us.json` / `tr_tr.json`) plus `README.md`, `MODRINTH_CURSEFORGE.md`, and `PRIVACY.md` to explicitly name `bore.pub`, `ntfy.sh`, and STUN/IP echo servers as optional free third-party defaults changeable in **⚙ Advanced**.
+- **SSRF & UPnP Hardening:** Disabled HTTP redirects, enforced DNS-rebinding pinned public HTTPS checks on custom endpoints, and restricted UPnP SSDP/SOAP requests to the responding local gateway IP.
+- **Icon Optimization:** Compressed `assets/peerpulsar/icon.png` (`512x512`) under 256 KiB (`~49 KB`) while preserving crisp quality and alpha transparency.
+
 ## v3.2.1+26.3
 - **Security & Hybrid Auth Hardening:** Domain-separated the locally derived hybrid Mojang verification challenge ID so Mojang session tokens are never exposed to hosts or third-party servers, and added join-side UDP network consent and explicit domain confirmation for custom signaling URLs.
 - **SSRF & Network Validation:** Enforced public-only URL/address validation on custom network/signaling endpoints to block loopback, link-local, and private network targets.

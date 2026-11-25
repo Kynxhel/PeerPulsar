@@ -4,6 +4,7 @@ import com.kynxhel.peerpulsar.config.PeerPulsarConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -101,5 +102,31 @@ class NetworkEndpointsTest {
         String p0 = NetworkEndpoints.providerKey(pair.get(0).host());
         String p1 = NetworkEndpoints.providerKey(pair.get(1).host());
         assertNotEquals(p0, p1, "Dual-STUN must pick two different STUN providers");
+    }
+
+    @Test
+    void upnpLocalGatewayUrlValidationAllowsMatchingLanAndRejectsNonLocalOrMismatch() throws Exception {
+        InetAddress gw1 = InetAddress.ofLiteral("192.168.1.1");
+        assertTrue(UPnPService.isAllowedLocalGatewayUrl("http://192.168.1.1:5000/rootDesc.xml", gw1));
+        assertTrue(UPnPService.isAllowedLocalGatewayUrl("https://192.168.1.1:5443/ctl/IPConn", gw1));
+        assertTrue(UPnPService.isAllowedLocalGatewayUrl("http://192.168.1.1:5000/rootDesc.xml", null));
+
+        assertFalse(UPnPService.isAllowedLocalGatewayUrl(null, gw1));
+        assertFalse(UPnPService.isAllowedLocalGatewayUrl("   ", gw1));
+        assertFalse(UPnPService.isAllowedLocalGatewayUrl("http://127.0.0.1:5000/x", null));
+        assertFalse(UPnPService.isAllowedLocalGatewayUrl("http://127.0.0.1:5000/x", InetAddress.ofLiteral("127.0.0.1")));
+        assertFalse(UPnPService.isAllowedLocalGatewayUrl("http://8.8.8.8/x", null));
+        assertFalse(UPnPService.isAllowedLocalGatewayUrl("http://8.8.8.8/x", InetAddress.ofLiteral("8.8.8.8")));
+        assertFalse(UPnPService.isAllowedLocalGatewayUrl("file:///etc/passwd", gw1));
+        assertFalse(UPnPService.isAllowedLocalGatewayUrl("http://192.168.1.2:5000/x", gw1));
+        assertFalse(UPnPService.isAllowedLocalGatewayUrl("http://user@192.168.1.1:5000/x", gw1));
+    }
+
+    @Test
+    void openPinnedPublicHttpsConnectionRejectsNonPublicAndNonHttps() {
+        assertThrows(IOException.class, () -> NetworkEndpoints.openPinnedPublicHttpsConnection("https://127.0.0.1/test", 1000, 1000));
+        assertThrows(IOException.class, () -> NetworkEndpoints.openPinnedPublicHttpsConnection("https://169.254.169.254/latest", 1000, 1000));
+        assertThrows(IOException.class, () -> NetworkEndpoints.openPinnedPublicHttpsConnection("http://ntfy.sh/test", 1000, 1000));
+        assertThrows(IOException.class, () -> NetworkEndpoints.openPinnedPublicHttpsConnection("https://localhost/test", 1000, 1000));
     }
 }

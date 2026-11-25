@@ -243,23 +243,43 @@ class SecurityCryptoTest {
     }
 
     @Test
-    void verifiedHybridServerIdRejectsForgedOrShortNonces() {
-        byte[] validNonce = new byte[32];
-        for (int i = 0; i < validNonce.length; i++) {
-            validNonce[i] = (byte) (i + 1);
+    void channelBindingRejectsMitmPublicKeySwap() throws Exception {
+        byte[] nonce = new byte[32];
+        for (int i = 0; i < nonce.length; i++) {
+            nonce[i] = (byte) (i + 1);
         }
-        String expected = OfflineAuth.computeHybridServerId(validNonce);
+        byte[] hostPubKeyHash = RoomKeys.sha256("host-rsa-public-key".getBytes(StandardCharsets.UTF_8));
+        byte[] mitmPubKeyHash = RoomKeys.sha256("mitm-rsa-public-key".getBytes(StandardCharsets.UTF_8));
+        String roomKey = RoomKeys.generate();
 
-        assertEquals(expected, OfflineAuth.resolveVerifiedHybridServerId(validNonce, expected));
-        assertEquals(expected, OfflineAuth.resolveVerifiedHybridServerId(validNonce, ""));
-        assertEquals(expected, OfflineAuth.resolveVerifiedHybridServerId(validNonce, null));
+        // 1. Room key HMAC proof must differ if the server public key hash is swapped
+        byte[] boundProofHost = RoomKeys.loginProof(roomKey, nonce, "Steve", hostPubKeyHash);
+        byte[] boundProofHostCopy = RoomKeys.loginProof(roomKey, nonce, "steve", hostPubKeyHash.clone());
+        byte[] boundProofMitm = RoomKeys.loginProof(roomKey, nonce, "Steve", mitmPubKeyHash);
+        byte[] unboundProof = RoomKeys.loginProof(roomKey, nonce, "Steve", null);
 
-        // Forged third-party serverId must be rejected
-        assertNull(OfflineAuth.resolveVerifiedHybridServerId(
-                validNonce, "4ed1f46bbe04bc756bcb17c0c7ce3e4632f06a48"));
+        assertArrayEquals(boundProofHost, boundProofHostCopy);
+        assertFalse(Arrays.equals(boundProofHost, boundProofMitm));
+        assertFalse(Arrays.equals(boundProofHost, unboundProof));
 
-        // Null or short (<16 byte) nonces must be rejected
-        assertNull(OfflineAuth.resolveVerifiedHybridServerId(null, expected));
-        assertNull(OfflineAuth.resolveVerifiedHybridServerId(new byte[15], null));
+        // 2. Ed25519 identity signature bound to MITM's public key must fail host verification
+        KeyPair kp = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        byte[] mitmSignedPayload = RoomKeys.identityPayload(nonce, "Steve", mitmPubKeyHash);
+        Signature sig = Signature.getInstance("Ed25519");
+        sig.initSign(kp.getPrivate());
+        sig.update(mitmSignedPayload);
+        byte[] mitmSignature = sig.sign();
+
+        assertTrue(ClientIdentity.verify(kp.getPublic().getEncoded(), mitmSignedPayload, mitmSignature));
+        assertFalse(ClientIdentity.verify(
+                kp.getPublic().getEncoded(),
+                RoomKeys.identityPayload(nonce, "Steve", hostPubKeyHash),
+                mitmSignature
+        ));
+        assertFalse(ClientIdentity.verify(
+                kp.getPublic().getEncoded(),
+                RoomKeys.identityPayload(nonce, "Steve", null),
+                mitmSignature
+        ));
     }
 }

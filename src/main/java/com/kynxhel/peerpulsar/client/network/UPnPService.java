@@ -17,8 +17,8 @@ import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.SocketTimeoutException;
 import java.net.URI;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import javax.net.ssl.HttpsURLConnection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
@@ -39,6 +39,7 @@ public class UPnPService {
 
     private volatile String controlUrl = null;
     private volatile String serviceType = null;
+    private volatile InetAddress gatewaySourceAddr = null;
     private volatile String externalIp = null;
     private volatile String routerWanIp = null;
     private volatile String localIp = null;
@@ -108,13 +109,16 @@ public class UPnPService {
             this.localIp = resolveLocalIpAddress();
             String prevControlUrl = this.controlUrl;
             String prevServiceType = this.serviceType;
+            InetAddress prevGatewaySourceAddr = this.gatewaySourceAddr;
             this.controlUrl = null;
             this.serviceType = null;
+            this.gatewaySourceAddr = null;
             boolean found = discoverRouter();
             if (!found) {
                 if (this.isMapped) {
                     this.controlUrl = prevControlUrl;
                     this.serviceType = prevServiceType;
+                    this.gatewaySourceAddr = prevGatewaySourceAddr;
                 }
                 this.routerWanIp = null;
                 return new GatewayProbeResult(false, null, false);
@@ -370,7 +374,8 @@ public class UPnPService {
                     socket.receive(responsePacket);
                     String response = new String(responsePacket.getData(), 0, responsePacket.getLength(), StandardCharsets.UTF_8);
                     String location = extractHeader(response, "LOCATION");
-                    if (location != null && triedLocations.add(location) && parseDeviceDescription(location)) {
+                    InetAddress ssdpSourceAddr = responsePacket.getAddress();
+                    if (location != null && triedLocations.add(location) && parseDeviceDescription(location, ssdpSourceAddr)) {
                         return true;
                     }
                 } catch (SocketTimeoutException e) {
@@ -383,16 +388,70 @@ public class UPnPService {
         return false;
     }
 
+    static boolean isAllowedLocalGatewayUrl(String rawUrl, InetAddress ssdpSourceAddr) {
+        if (rawUrl == null || rawUrl.isBlank()) return false;
+        URI uri;
+        try {
+            uri = URI.create(rawUrl.trim());
+        } catch (Exception e) {
+            return false;
+        }
+        String scheme = uri.getScheme();
+        if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+            return false;
+        }
+        if (uri.getRawUserInfo() != null) {
+            return false;
+        }
+        String host = uri.getHost();
+        if (host == null || host.isBlank()) {
+            return false;
+        }
+        String lookupHost = host.trim();
+        if (lookupHost.startsWith("[") && lookupHost.endsWith("]") && lookupHost.length() > 2) {
+            lookupHost = lookupHost.substring(1, lookupHost.length() - 1);
+        }
+        try {
+            InetAddress[] addrs = InetAddress.getAllByName(lookupHost);
+            if (addrs == null || addrs.length == 0) {
+                return false;
+            }
+            for (InetAddress addr : addrs) {
+                if (addr.isLoopbackAddress() || addr.isMulticastAddress() || addr.isAnyLocalAddress()) {
+                    return false;
+                }
+                if (!addr.isSiteLocalAddress() && !addr.isLinkLocalAddress()) {
+                    return false;
+                }
+                if (ssdpSourceAddr != null && !addr.equals(ssdpSourceAddr)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /**
      * Parses each <service> block individually so tag order (<controlURL> before or after <serviceType>)
      * and optional XML namespace prefixes never cause cross-service mismatches.
      */
-    private boolean parseDeviceDescription(String locationUrl) {
+    private boolean parseDeviceDescription(String locationUrl, InetAddress ssdpSourceAddr) {
+        if (!isAllowedLocalGatewayUrl(locationUrl, ssdpSourceAddr)) {
+            PeerPulsar.LOGGER.warn("[UPnP] Rejected untrusted SSDP LOCATION URL: {}", locationUrl);
+            return false;
+        }
         HttpURLConnection conn = null;
         try {
             conn = (HttpURLConnection) URI.create(locationUrl).toURL().openConnection();
+            conn.setInstanceFollowRedirects(false);
             conn.setConnectTimeout(2500);
             conn.setReadTimeout(2500);
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) {
+                return false;
+            }
             String xml = readStream(conn.getInputStream());
 
             Matcher serviceMatcher = SERVICE_BLOCK_PATTERN.matcher(xml);
@@ -401,10 +460,17 @@ public class UPnPService {
                 Matcher typeMatcher = SERVICE_TYPE_PATTERN.matcher(block);
                 Matcher ctrlMatcher = CONTROL_URL_PATTERN.matcher(block);
                 if (typeMatcher.find() && ctrlMatcher.find()) {
-                    this.serviceType = typeMatcher.group(1).trim();
+                    String candidateServiceType = typeMatcher.group(1).trim();
                     String rawControlUrl = ctrlMatcher.group(1).trim();
                     URI resolved = URI.create(locationUrl).resolve(rawControlUrl);
-                    this.controlUrl = resolved.toString();
+                    String candidateControlUrl = resolved.toString();
+                    if (!isAllowedLocalGatewayUrl(candidateControlUrl, ssdpSourceAddr)) {
+                        PeerPulsar.LOGGER.warn("[UPnP] Rejected untrusted UPnP controlURL: {}", candidateControlUrl);
+                        continue;
+                    }
+                    this.gatewaySourceAddr = ssdpSourceAddr;
+                    this.serviceType = candidateServiceType;
+                    this.controlUrl = candidateControlUrl;
                     return true;
                 }
             }
@@ -465,22 +531,29 @@ public class UPnPService {
     }
 
     private void queryExternalIp() {
-        if (controlUrl == null || serviceType == null) return;
+        String currentControlUrl = this.controlUrl;
+        String currentServiceType = this.serviceType;
+        InetAddress currentGatewayAddr = this.gatewaySourceAddr;
+        if (currentControlUrl == null || currentServiceType == null
+                || !isAllowedLocalGatewayUrl(currentControlUrl, currentGatewayAddr)) {
+            return;
+        }
         String soapBody = "<?xml version=\"1.0\"?>\r\n" +
                 "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n" +
                 "<s:Body>\r\n" +
-                "<u:GetExternalIPAddress xmlns:u=\"" + serviceType + "\">\r\n" +
+                "<u:GetExternalIPAddress xmlns:u=\"" + currentServiceType + "\">\r\n" +
                 "</u:GetExternalIPAddress>\r\n" +
                 "</s:Body>\r\n" +
                 "</s:Envelope>";
 
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) URI.create(controlUrl).toURL().openConnection();
+            conn = (HttpURLConnection) URI.create(currentControlUrl).toURL().openConnection();
+            conn.setInstanceFollowRedirects(false);
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"");
-            conn.setRequestProperty("SOAPAction", "\"" + serviceType + "#GetExternalIPAddress\"");
+            conn.setRequestProperty("SOAPAction", "\"" + currentServiceType + "#GetExternalIPAddress\"");
             conn.setConnectTimeout(2500);
             conn.setReadTimeout(2500);
 
@@ -509,12 +582,9 @@ public class UPnPService {
 
     private void resolveExternalIpFallback() {
         for (String endpoint : NetworkEndpoints.getOrderedIpEcho(PeerPulsarConfig.get())) {
-            HttpURLConnection conn = null;
+            HttpsURLConnection conn = null;
             try {
-                URL url = URI.create(endpoint).toURL();
-                conn = (HttpURLConnection) url.openConnection();
-                conn.setConnectTimeout(2500);
-                conn.setReadTimeout(2500);
+                conn = NetworkEndpoints.openPinnedPublicHttpsConnection(endpoint, 2500, 2500);
                 String ip = readStream(conn.getInputStream()).trim();
                 if (!ip.isEmpty() && ip.length() <= 45) {
                     this.externalIp = ip;
@@ -530,12 +600,15 @@ public class UPnPService {
     private boolean sendSoapRequest(String action, String soapBody) {
         String currentControlUrl = this.controlUrl;
         String currentServiceType = this.serviceType;
-        if (currentControlUrl == null || currentServiceType == null) {
+        InetAddress currentGatewayAddr = this.gatewaySourceAddr;
+        if (currentControlUrl == null || currentServiceType == null
+                || !isAllowedLocalGatewayUrl(currentControlUrl, currentGatewayAddr)) {
             return false;
         }
         HttpURLConnection conn = null;
         try {
             conn = (HttpURLConnection) URI.create(currentControlUrl).toURL().openConnection();
+            conn.setInstanceFollowRedirects(false);
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"");
@@ -552,6 +625,7 @@ public class UPnPService {
             PeerPulsar.LOGGER.warn("[UPnP] SOAP {} connection/IO error (clearing cached gateway): {}", action, e.getMessage());
             this.controlUrl = null;
             this.serviceType = null;
+            this.gatewaySourceAddr = null;
             return false;
         } catch (Exception e) {
             PeerPulsar.LOGGER.warn("[UPnP] SOAP {} request failed: {}", action, e.getMessage());

@@ -16,14 +16,14 @@ PeerPulsar **never** contacts external servers on game startup, on the title scr
 
 `bore.pub`, `ntfy.sh`, and the listed STUN / IP echo endpoints are **optional suggested community defaults** unrelated to the mod author, with no uptime or SLA guarantee. You can freely change, disable, or replace any of them with self-hosted or custom servers in **Advanced → Network Services**.
 
-### Join-Side UDP Consent & Custom Signaling Confirmation
-- Joining via **UDP Hole Punch** requires your explicit one-time network consent (matching the host-side opt-in) before contacting STUN or signaling endpoints.
-- If a UDP room code specifies a custom signaling server URL, PeerPulsar validates that the URL resolves only to public network addresses (blocking loopback, link-local, and private/internal addresses) and prompts you with an explicit confirmation showing the custom signaling domain before connecting.
+### Named First-Use Consent, SSRF & UPnP Hardening
+- Both the host-side **Network Diagnostics** consent prompt and the join-side **UDP P2P Connection Consent** prompt explicitly name `bore.pub` (fallback TCP relay), `ntfy.sh` (AES-256-GCM encrypted UDP signaling), and public STUN / IP echo servers (`stun.l.google.com`, `stun.cloudflare.com`, etc.) as optional free third-party defaults changeable in **⚙ Advanced**.
+- If a UDP room code specifies a custom signaling server URL, PeerPulsar disables HTTP redirects, enforces DNS-rebinding pinned public HTTPS checks (blocking loopback, link-local, and private/internal addresses), and prompts you with an explicit confirmation naming both the custom signaling domain and configured STUN servers before connecting.
+- During the opt-in **Network Test**, PeerPulsar sends local SSDP multicast packets and briefly tests a temporary 60-second UPnP port mapping (immediately deleted after verification). UPnP SSDP/SOAP requests are strictly restricted to the responding local gateway IP.
 
-### Mojang Hybrid Verification & Token Safety
-When Offline LAN Auth is enabled, players with valid Mojang accounts can prove ownership of their Mojang profile via hybrid verification. Your Mojang session token is **never** sent to the host or any third-party server; instead, the client and host only contact Mojang's official session service (`sessionserver.mojang.com`) using a locally derived, domain-separated challenge ID.
-
-During the opt-in **Network Test**, PeerPulsar also sends local SSDP multicast packets to your router and briefly tests a temporary 60-second UPnP port mapping (immediately deleted after verification).
+### Zero Session Token Access & End-to-End Encrypted Offline LAN Auth
+- **Zero Session Token Access:** PeerPulsar **never** reads `User.getAccessToken()` or contacts Mojang session servers on behalf of clients.
+- **End-to-End Encrypted Offline LAN Auth:** When Offline LAN Auth is enabled, PeerPulsar uses Minecraft's native RSA + AES-CFB8 transport encryption (`shouldAuthenticate = false`) channel-bound via SHA-256 host key hash into the `#KEY` HMAC and Ed25519 signature — protecting gameplay traffic against MITM and eavesdropping even over `bore.pub` or UDP Hole Punch. (Note: UDP RUDP transport headers remain unencrypted so peers/NAT can route packets, while the Minecraft stream carried inside is encrypted.)
 
 ## 2. Room Codes & IP Address Disclosure
 - **Direct P2P (UPnP)** and **Local LAN** room codes (`P2P-...`) encode the host's IP address and port (XOR/Base64url encoded, not encrypted) so peers can connect directly. Share Direct P2P codes only with people you trust, or use **Tunnel Relay** if you prefer to hide your IP address.

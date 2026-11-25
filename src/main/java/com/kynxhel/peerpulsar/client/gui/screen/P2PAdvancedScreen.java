@@ -390,8 +390,8 @@ public class P2PAdvancedScreen extends Screen {
         }
         boolean valid = switch (activeSection) {
             case RELAY -> NetworkEndpoints.isValidHostPort(raw);
-            case SIGNALING -> NetworkEndpoints.isValidHttpsUrl(raw);
-            case STUN_IP -> NetworkEndpoints.isValidHostPort(raw) || NetworkEndpoints.isValidHttpsUrl(raw);
+            case SIGNALING -> NetworkEndpoints.normalizePublicHttpsUrl(raw) != null;
+            case STUN_IP -> NetworkEndpoints.isValidHostPort(raw) || NetworkEndpoints.normalizePublicHttpsUrl(raw) != null;
         };
         if (!valid) {
             this.customValidationError = switch (activeSection) {
@@ -439,13 +439,13 @@ public class P2PAdvancedScreen extends Screen {
                 cfg.save();
             }
         } else if (activeSection == NetworkSection.SIGNALING) {
-            String url = NetworkEndpoints.normalizeHttpsUrl(raw);
+            String url = NetworkEndpoints.normalizePublicHttpsUrl(raw);
             if (url != null) {
                 cfg.getSignalingSection().addCustom(url);
                 cfg.save();
             }
         } else {
-            String url = NetworkEndpoints.normalizeHttpsUrl(raw);
+            String url = NetworkEndpoints.normalizePublicHttpsUrl(raw);
             if (url != null) {
                 cfg.getIpEchoSection().addCustom(url);
                 cfg.save();
@@ -464,10 +464,10 @@ public class P2PAdvancedScreen extends Screen {
 
     private String rawNormalized(String raw, NetworkSection section) {
         if (section == NetworkSection.SIGNALING) {
-            String n = NetworkEndpoints.normalizeHttpsUrl(raw);
+            String n = NetworkEndpoints.normalizePublicHttpsUrl(raw);
             return n != null ? n : raw;
         }
-        String n = NetworkEndpoints.normalizeHttpsUrl(raw);
+        String n = NetworkEndpoints.normalizePublicHttpsUrl(raw);
         if (n != null) return n;
         NetworkEndpoints.HostPort hp = NetworkEndpoints.parseHostPort(raw);
         return hp != null ? hp.formatted() : raw;

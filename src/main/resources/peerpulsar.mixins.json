@@ -5,6 +5,9 @@
   "compatibilityLevel": "JAVA_25",
   "mixins": [],
   "client": [
+    "ConnectionAccessor",
+    "ClientHandshakePacketListenerAccessor",
+    "ClientHandshakePacketListenerImplMixin",
     "ServerLoginPacketListenerAccessor",
     "ServerLoginPacketListenerImplMixin",
     "IntegratedServerMixin",

@@ -46,13 +46,25 @@ public final class RoomKeys {
 
     /** HMAC proof that the joiner knows the room key, bound to the server nonce and the login name. */
     public static byte[] loginProof(String roomKey, byte[] nonce, String playerName) {
+        return loginProof(roomKey, nonce, playerName, null);
+    }
+
+    /**
+     * HMAC proof that the joiner knows the room key, bound to the server nonce, login name,
+     * and the host's encryption public key hash (channel binding).
+     */
+    public static byte[] loginProof(String roomKey, byte[] nonce, String playerName, byte[] serverPubKeyHash) {
         try {
-            byte[] keyMaterial = sha256(("peerpulsar-room-v1|" + normalize(roomKey)).getBytes(StandardCharsets.UTF_8));
+            byte[] keyMaterial = sha256(("peerpulsar-room-v2|" + normalize(roomKey)).getBytes(StandardCharsets.UTF_8));
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(keyMaterial, "HmacSHA256"));
             mac.update(nonce);
             mac.update((byte) '|');
             mac.update(playerName.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8));
+            mac.update((byte) '|');
+            if (serverPubKeyHash != null && serverPubKeyHash.length > 0) {
+                mac.update(serverPubKeyHash);
+            }
             return mac.doFinal();
         } catch (Exception e) {
             throw new IllegalStateException("HMAC-SHA256 unavailable", e);
@@ -61,11 +73,20 @@ public final class RoomKeys {
 
     /** Payload signed with the joiner's persistent identity key. */
     public static byte[] identityPayload(byte[] nonce, String playerName) {
+        return identityPayload(nonce, playerName, null);
+    }
+
+    /** Payload signed with the joiner's persistent identity key, bound to the host's encryption public key hash. */
+    public static byte[] identityPayload(byte[] nonce, String playerName, byte[] serverPubKeyHash) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.writeBytes("peerpulsar-login-v1|".getBytes(StandardCharsets.UTF_8));
+        out.writeBytes("peerpulsar-login-v2|".getBytes(StandardCharsets.UTF_8));
         out.writeBytes(nonce);
         out.write('|');
         out.writeBytes(playerName.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8));
+        out.write('|');
+        if (serverPubKeyHash != null && serverPubKeyHash.length > 0) {
+            out.writeBytes(serverPubKeyHash);
+        }
         return out.toByteArray();
     }
 

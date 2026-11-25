@@ -1,10 +1,11 @@
 package com.kynxhel.peerpulsar.security;
 
 import com.kynxhel.peerpulsar.PeerPulsar;
+import com.kynxhel.peerpulsar.mixin.ConnectionAccessor;
 import com.kynxhel.peerpulsar.mixin.ServerLoginPacketListenerAccessor;
 import com.mojang.authlib.GameProfile;
-import com.mojang.authlib.services.ProfileResult;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
 import net.fabricmc.fabric.api.networking.v1.ServerLoginConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerLoginNetworking;
 import net.minecraft.network.Connection;
@@ -15,12 +16,9 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerLoginPacketListenerImpl;
 import net.minecraft.world.level.storage.LevelResource;
 
-import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 import java.util.UUID;
@@ -38,12 +36,12 @@ import java.util.concurrent.TimeUnit;
  * <br>
  * Layer 2 (Join Approval): Optional per-connection host approval with device fingerprint matching.
  * <br>
- * Player Identity (when Offline LAN Auth is enabled): Hybrid Mojang verification for valid Mojang
- * accounts, deterministic Ed25519-key UUIDs otherwise, and safe one-time legacy data migration.
+ * Player Identity (when Offline LAN Auth is enabled): Channel-bound encrypted login handshake,
+ * deterministic Ed25519-key UUIDs, and safe one-time legacy data migration.
  */
 public final class OfflineAuth {
     public static final Identifier CHANNEL = Identifier.fromNamespaceAndPath("peerpulsar", "offline_auth");
-    public static final int PROTOCOL = 2;
+    public static final int PROTOCOL = 3;
 
     private static final SecureRandom RNG = new SecureRandom();
     private static final Executor FALLBACK_EXECUTOR = Executors.newCachedThreadPool(r -> {
@@ -71,7 +69,7 @@ public final class OfflineAuth {
 
     private record PendingQuery(
             byte[] nonce,
-            String hybridServerId,
+            byte[] hostPubKeyHash,
             String remoteIp,
             boolean offlineMode,
             boolean roomKeyRequired,
@@ -100,27 +98,12 @@ public final class OfflineAuth {
         return !isLocalLan || requireOnLanSetting;
     }
 
-    public static String computeHybridServerId(byte[] nonce) {
-        byte[] digest = RoomKeys.sha256(("peerpulsar-mojang-v1|" + RoomKeys.hex(nonce)).getBytes(StandardCharsets.UTF_8));
-        byte[] twenty = Arrays.copyOf(digest, 20);
-        return new BigInteger(twenty).toString(16);
-    }
-
-    /**
-     * Locally derives and verifies the hybrid Mojang serverId from the login challenge nonce.
-     * Rejects short/missing nonces and any host-provided serverId that does not match the
-     * domain-separated local derivation, preventing cross-server session relay attacks.
-     */
-    public static String resolveVerifiedHybridServerId(byte[] nonce, String serverProvidedId) {
-        if (nonce == null || nonce.length < 16) {
-            return null;
+    private static boolean isConnectionEncrypted(Connection connection) {
+        if (connection == null) {
+            return false;
         }
-        String expected = computeHybridServerId(nonce);
-        if (serverProvidedId != null && !serverProvidedId.isEmpty() && !expected.equals(serverProvidedId)) {
-            PeerPulsar.LOGGER.warn("[PeerPulsar-Auth] Rejected mismatched hybridServerId from host");
-            return null;
-        }
-        return expected;
+        Channel ch = ((ConnectionAccessor) connection).peerpulsar$getChannel();
+        return ch != null && ch.pipeline().get("decrypt") != null && ch.pipeline().get("encrypt") != null;
     }
 
     public static void registerServerSide() {
@@ -138,6 +121,11 @@ public final class OfflineAuth {
                 return;
             }
 
+            if (!isConnectionEncrypted(connection)) {
+                handler.disconnect(Component.literal("Encrypted PeerPulsar handshake required."));
+                return;
+            }
+
             String remoteIp = ctx.resolveRemoteIp(connection);
             if (roomKeyRequired && BruteForceGuard.getGlobal().isBlocked(remoteIp)) {
                 handler.disconnect(Component.literal("Too many failed attempts. Try again later."));
@@ -146,15 +134,14 @@ public final class OfflineAuth {
 
             byte[] nonce = new byte[32];
             RNG.nextBytes(nonce);
-            String hybridServerId = offlineMode ? computeHybridServerId(nonce) : "";
+            byte[] hostPubKeyHash = RoomKeys.sha256(server.getKeyPair().getPublic().getEncoded());
 
-            PENDING.put(handler, new PendingQuery(nonce, hybridServerId, remoteIp, offlineMode, roomKeyRequired, joinApproval));
+            PENDING.put(handler, new PendingQuery(nonce, hostPubKeyHash, remoteIp, offlineMode, roomKeyRequired, joinApproval));
 
             FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
             buf.writeVarInt(PROTOCOL);
             buf.writeByteArray(nonce);
             buf.writeBoolean(offlineMode);
-            buf.writeUtf(hybridServerId, 64);
             sender.sendPacket(CHANNEL, buf);
         });
 
@@ -180,7 +167,6 @@ public final class OfflineAuth {
             final byte[] proof;
             final byte[] publicKey;
             final byte[] signature;
-            final boolean attemptedHybrid;
             try {
                 version = buf.readVarInt();
                 if (version != PROTOCOL) {
@@ -191,7 +177,6 @@ public final class OfflineAuth {
                 proof = buf.readByteArray(64);
                 publicKey = buf.readByteArray(256);
                 signature = buf.readByteArray(256);
-                attemptedHybrid = buf.readBoolean();
             } catch (Exception e) {
                 if (query.roomKeyRequired()) {
                     BruteForceGuard.getGlobal().recordFailure(query.remoteIp());
@@ -213,7 +198,7 @@ public final class OfflineAuth {
                     handler.disconnect(Component.literal("The host is not accepting players right now."));
                     return;
                 }
-                if (!hasKey || !MessageDigest.isEqual(RoomKeys.loginProof(roomKey, query.nonce(), name), proof)) {
+                if (!hasKey || !MessageDigest.isEqual(RoomKeys.loginProof(roomKey, query.nonce(), name, query.hostPubKeyHash()), proof)) {
                     BruteForceGuard.getGlobal().recordFailure(query.remoteIp());
                     handler.disconnect(Component.literal("Wrong or missing room key. Ask the host for the current room code."));
                     return;
@@ -227,8 +212,8 @@ public final class OfflineAuth {
                 return;
             }
 
-            // Ed25519 device identity signature verification
-            if (!ClientIdentity.verify(publicKey, RoomKeys.identityPayload(query.nonce(), name), signature)) {
+            // Ed25519 device identity signature verification (channel-bound to host public key hash)
+            if (!ClientIdentity.verify(publicKey, RoomKeys.identityPayload(query.nonce(), name, query.hostPubKeyHash()), signature)) {
                 handler.disconnect(Component.literal("PeerPulsar identity check failed."));
                 return;
             }
@@ -236,7 +221,7 @@ public final class OfflineAuth {
             Executor exec = (ctx != null && ctx.getAsyncExecutor() != null) ? ctx.getAsyncExecutor() : FALLBACK_EXECUTOR;
             CompletableFuture<Void> gateFuture = CompletableFuture.runAsync(() -> {
                 try {
-                    completeLoginVerification(server, handler, query, name, publicKey, attemptedHybrid);
+                    completeLoginVerification(server, handler, query, name, publicKey);
                 } catch (Exception e) {
                     PeerPulsar.LOGGER.warn("[PeerPulsar-Auth] Verification error for '{}': {}", name, e.getMessage());
                     server.execute(() -> handler.disconnect(Component.literal("PeerPulsar authentication failed.")));
@@ -261,31 +246,16 @@ public final class OfflineAuth {
             ServerLoginPacketListenerImpl handler,
             PendingQuery query,
             String name,
-            byte[] publicKey,
-            boolean attemptedHybrid
+            byte[] publicKey
     ) throws Exception {
         String keyFingerprint = RoomKeys.hex(RoomKeys.sha256(publicKey));
         Path worldDir = server.getWorldPath(LevelResource.ROOT);
 
-        // 1. Resolve effective profile when Offline LAN Auth is active (hybrid Mojang -> key UUID fallback)
+        // 1. Resolve effective profile: deterministic Ed25519-key UUID when Offline LAN Auth is active
         GameProfile resolvedOfflineProfile = null;
         String mojangUuid = null;
         if (query.offlineMode()) {
-            if (attemptedHybrid && query.hybridServerId() != null && !query.hybridServerId().isEmpty()) {
-                try {
-                    ProfileResult pr = server.services().sessionService().hasJoinedServer(name, query.hybridServerId(), null);
-                    if (pr != null && pr.profile() != null) {
-                        resolvedOfflineProfile = pr.profile();
-                        mojangUuid = pr.profile().id().toString();
-                        PeerPulsar.LOGGER.info("[PeerPulsar-Auth] Verified Mojang hybrid identity for '{}' ({})", name, mojangUuid);
-                    }
-                } catch (Exception e) {
-                    PeerPulsar.LOGGER.debug("[PeerPulsar-Auth] Hybrid Mojang check skipped/failed for '{}', using key UUID: {}", name, e.getMessage());
-                }
-            }
-            if (resolvedOfflineProfile == null) {
-                resolvedOfflineProfile = new GameProfile(PlayerDataMigrator.deterministicKeyUuid(publicKey), name);
-            }
+            resolvedOfflineProfile = new GameProfile(PlayerDataMigrator.deterministicKeyUuid(publicKey), name);
         } else {
             GameProfile existingAuth = ((ServerLoginPacketListenerAccessor) handler).peerpulsar$getAuthenticatedProfile();
             if (existingAuth != null && existingAuth.id() != null) {

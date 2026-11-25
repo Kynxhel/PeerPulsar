@@ -21,6 +21,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.URI;
+import javax.net.ssl.HttpsURLConnection;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -288,9 +289,8 @@ public class UdpHolePunchService {
         while (hostActive && hostGeneration.get() == gen) {
             HttpURLConnection conn = null;
             try {
-                conn = (HttpURLConnection) URI.create(signalingBase + "/" + topic + "/json?since=" + lastSinceEpoch).toURL().openConnection();
-                conn.setConnectTimeout(6000);
-                conn.setReadTimeout(90_000);
+                conn = NetworkEndpoints.openPinnedPublicHttpsConnection(
+                        signalingBase + "/" + topic + "/json?since=" + lastSinceEpoch, 6000, 90_000);
                 synchronized (hostLock) {
                     if (!hostActive || hostGeneration.get() != gen) {
                         break;
@@ -607,9 +607,8 @@ public class UdpHolePunchService {
                 // Subscribe to signaling BEFORE publishing join request, synchronizing on stream open
                 CompletableFuture<InetSocketAddress> hostAddrFuture = new CompletableFuture<>();
                 CountDownLatch subscribedLatch = new CountDownLatch(1);
-                HttpURLConnection signalConn = (HttpURLConnection) URI.create(signalingBase + "/" + topic + "/json").toURL().openConnection();
-                signalConn.setConnectTimeout(5000);
-                signalConn.setReadTimeout(9000);
+                HttpsURLConnection signalConn = NetworkEndpoints.openPinnedPublicHttpsConnection(
+                        signalingBase + "/" + topic + "/json", 5000, 9000);
                 synchronized (clientLock) {
                     if (clientGeneration.get() != gen) {
                         signalConn.disconnect();
@@ -1361,12 +1360,11 @@ public class UdpHolePunchService {
     }
 
     private static void publishSignal(String signalingBase, String topic, String body) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) URI.create(signalingBase + "/" + topic).toURL().openConnection();
+        HttpsURLConnection conn = NetworkEndpoints.openPinnedPublicHttpsConnection(
+                signalingBase + "/" + topic, 4000, 4000);
         try {
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
-            conn.setConnectTimeout(4000);
-            conn.setReadTimeout(4000);
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(body.getBytes(StandardCharsets.UTF_8));
             }
