@@ -2,7 +2,7 @@
 
 > **Project History:** Originally created as *FabricP2PMod*, temporarily rebranded to *Atarca* in v3.0.0 (when Cloud Sync / Google OAuth was removed), and renamed to **PeerPulsar** in v3.1.0.
 
-## Unreleased
+## v3.2.1+26.3
 - **Security & Hybrid Auth Hardening:** Domain-separated the locally derived hybrid Mojang verification challenge ID so Mojang session tokens are never exposed to hosts or third-party servers, and added join-side UDP network consent and explicit domain confirmation for custom signaling URLs.
 - **SSRF & Network Validation:** Enforced public-only URL/address validation on custom network/signaling endpoints to block loopback, link-local, and private network targets.
 - **UI Resource Leak & Cross-Platform Identity Backup:** Fixed UI resource leaks (`P2PJoinScreen`) and replaced `javax.swing`/`java.awt` file dialogs with cross-platform game-directory backup export/import (`peerpulsar-identity-backup.json`) for identity management.
