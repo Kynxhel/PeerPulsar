@@ -86,4 +86,7 @@ jar {
     from("LICENSE") {
         rename { "${it}_${resolvedArchivesName}" }
     }
+    from("THIRD_PARTY_LICENSES.md") {
+        rename { "${it}_${resolvedArchivesName}" }
+    }
 }

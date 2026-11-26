@@ -79,8 +79,9 @@ public final class PeerPulsarConfig {
 
         public synchronized boolean removeCustom(String entry) {
             if (custom == null || entry == null) return false;
-            boolean removed = custom.remove(entry);
-            if (removed && Objects.equals(selected, entry)) {
+            String trimmed = entry.trim();
+            boolean removed = custom.remove(trimmed) || custom.remove(entry);
+            if (removed && selected != null && (Objects.equals(selected, trimmed) || Objects.equals(selected, entry))) {
                 selected = null;
                 mode = MODE_AUTO;
             }
@@ -261,12 +262,22 @@ public final class PeerPulsarConfig {
 
     public synchronized void saveToFile(Path file) {
         try {
-            normalize();
+            String json;
+            synchronized (relay) {
+                synchronized (signaling) {
+                    synchronized (stun) {
+                        synchronized (ipEcho) {
+                            normalize();
+                            json = GSON.toJson(this);
+                        }
+                    }
+                }
+            }
             if (file.getParent() != null) {
                 Files.createDirectories(file.getParent());
             }
             Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-            Files.writeString(tmp, GSON.toJson(this), StandardCharsets.UTF_8);
+            Files.writeString(tmp, json, StandardCharsets.UTF_8);
             try {
                 Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (Exception atomicEx) {

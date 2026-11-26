@@ -50,6 +50,35 @@ public final class NameLockStore {
         return Result.BOUND_NEW;
     }
 
+    /**
+     * Atomically verifies or claims a name lock on login, optionally overwriting an existing mismatch
+     * only when explicitly permitted (e.g., host-approved device change).
+     */
+    public static synchronized Result verifyOrRebind(Path worldDir, String playerName, String fingerprint, boolean allowOverwrite) {
+        if (worldDir == null || playerName == null || fingerprint == null) {
+            return Result.MISMATCH;
+        }
+        Path file = worldDir.resolve(FILE_NAME);
+        String key = playerName.toLowerCase(Locale.ROOT);
+        Map<String, String> locks = read(file);
+        String existing = locks.get(key);
+        if (existing == null) {
+            locks.put(key, fingerprint);
+            write(file, locks);
+            PeerPulsar.LOGGER.info("[PeerPulsar-Auth] Name '{}' is now locked to identity {}", playerName, fingerprint.substring(0, 12));
+            return Result.BOUND_NEW;
+        }
+        if (existing.equalsIgnoreCase(fingerprint)) {
+            return Result.MATCHED;
+        }
+        if (allowOverwrite) {
+            locks.put(key, fingerprint);
+            write(file, locks);
+            return Result.BOUND_NEW;
+        }
+        return Result.MISMATCH;
+    }
+
     public static synchronized String getBoundFingerprint(Path worldDir, String playerName) {
         if (worldDir == null || playerName == null) return null;
         Map<String, String> locks = read(worldDir.resolve(FILE_NAME));

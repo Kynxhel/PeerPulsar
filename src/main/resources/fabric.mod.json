@@ -3,7 +3,7 @@
   "id": "peerpulsar",
   "version": "${version}",
   "name": "PeerPulsar",
-  "description": "Open-source peer-to-peer world hosting for Minecraft 26.3 with opt-in NAT/CGNAT diagnostics, UPnP port forwarding, UDP Hole Punching, Tunnel Relay, embedded room keys, optional join approval, and configurable network services.",
+  "description": "Open-source peer-to-peer world hosting for Minecraft 26.3 (required on both host and joiner) featuring UPnP, 3-engine UDP Hole Punching (RUDP, KCP, QUIC) with live network switch hints, Tunnel Relay, #KEY room invites, default-on Join Approval with per-guest OP/Kick controls, and configurable network services.",
   "authors": [
     "Kynxhel"
   ],
@@ -12,7 +12,11 @@
     "sources": "https://github.com/Kynxhel/PeerPulsar",
     "issues": "https://github.com/Kynxhel/PeerPulsar/issues"
   },
-  "license": "MIT",
+  "license": [
+    "MIT",
+    "LGPL-3.0-only",
+    "Apache-2.0"
+  ],
   "icon": "assets/peerpulsar/icon.png",
   "environment": "client",
   "entrypoints": {

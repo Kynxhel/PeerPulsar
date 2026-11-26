@@ -267,6 +267,8 @@ public class P2PJoinScreen extends Screen {
         }
 
         if (target.isUdpHolePunch() && !PeerPulsarConfig.get().hasUdpJoinConsent()) {
+            var sigServers = NetworkEndpoints.getOrderedSignaling(PeerPulsarConfig.get());
+            String activeSignal = sigServers.isEmpty() ? NetworkEndpoints.DEFAULT_SIGNALING_URL : sigServers.get(0);
             this.minecraft.setScreenAndShow(new ConfirmScreen(
                     confirmed -> {
                         if (confirmed) {
@@ -280,7 +282,7 @@ public class P2PJoinScreen extends Screen {
                         }
                     },
                     Component.translatable("screen.peerpulsar.join.consent_udp_title").withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD),
-                    Component.translatable("screen.peerpulsar.join.consent_udp_body", NetworkEndpoints.DEFAULT_SIGNALING_URL),
+                    Component.translatable("screen.peerpulsar.join.consent_udp_body", activeSignal),
                     Component.translatable("screen.peerpulsar.join.consent_udp_confirm"),
                     Component.translatable("gui.cancel")
             ));
@@ -387,12 +389,19 @@ public class P2PJoinScreen extends Screen {
         int floatBob = Math.round((float) Math.sin(timeSec * 2.4) * 2.0f);
         int headerY = cardY - 40 + slideOffset;
         NeonRenderUtils.drawModLogo(graphics, panelLeft + 2, headerY + floatBob, 28, cardAccent, timeSec);
-        graphics.text(this.font, Component.translatable("screen.peerpulsar.join.header").withStyle(ChatFormatting.BOLD),
+        int advX = advancedButton != null ? advancedButton.getX() : (panelLeft + panelW - 66);
+        boolean showMcBadge = panelW >= 316;
+        int badgeX = panelLeft + panelW - 122;
+        int maxHeaderW = Math.max(40, (showMcBadge ? badgeX : advX) - (panelLeft + 38) - 6);
+        int maxInstW = Math.max(40, advX - (panelLeft + 38) - 6);
+        graphics.text(this.font, truncatePlain(tr("screen.peerpulsar.join.header"), maxHeaderW),
                 panelLeft + 38, headerY + 3, NeonTheme.TEXT_PRIMARY, true);
-        graphics.text(this.font, Component.translatable("screen.peerpulsar.join.instruction"),
+        graphics.text(this.font, truncatePlain(tr("screen.peerpulsar.join.instruction"), maxInstW),
                 panelLeft + 38, headerY + 16, NeonTheme.TEXT_SECONDARY, false);
-        NeonRenderUtils.drawBadge(graphics, this.font, panelLeft + panelW - 122, headerY + 6,
-                "MC 26.3", NeonTheme.CYAN, false, timeSec);
+        if (showMcBadge) {
+            NeonRenderUtils.drawBadge(graphics, this.font, badgeX, headerY + 6,
+                    "MC 26.3", NeonTheme.CYAN, false, timeSec);
+        }
 
         // 2. Main Glass Portal Card
         int cardH = 104;
@@ -497,6 +506,8 @@ public class P2PJoinScreen extends Screen {
     @Override
     public void removed() {
         this.screenActive = false;
+        this.isTesting = false;
+        this.pingGeneration.incrementAndGet();
         if (this.isPunching) {
             this.isPunching = false;
             UdpHolePunchService.getInstance().stopClientProxy();

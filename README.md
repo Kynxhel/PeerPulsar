@@ -32,7 +32,7 @@ Click **Test** on the **Start P2P** screen (after reviewing the one-time consent
 
 ### 3-Engine UDP P2P Transport (`RUDP` / `KCP` / `QUIC`) & Smart Switch Hints
 - **Auto Engine Probing:** Immediately after NAT hole punching, **UDP Punch** runs a ~150 ms probe to pick the best engine for your link: **RUDP** (lightweight/minimal CPU for clean `<55 ms` links), **KCP** (`10 ms` tick, SACK, fast-resend for jittery PvP or light packet loss), or **QUIC** (`tech.kwik`, TLS 1.3 encrypted transport + congestion control for high ping/loss/mobile networks).
-- **In-Game Switch Popup:** If your ping or packet loss changes noticeably for ~30 seconds, a bottom-right Neon hint (plus chat shortcut) offers to switch engines automatically with a clean ~1s reconnect, or you can lock an engine in **⚙ Advanced → Network Services → UDP Engine**.
+- **In-Game Switch Popup:** If your ping or packet loss changes noticeably over ~26–30 seconds (5-minute cooldown), a bottom-right Neon hint (plus chat shortcut) offers to let you switch engines cleanly, or you can lock an engine in **⚙ Advanced → Network Services → UDP Engine**.
 
 ### Room Key Protection, Join Approval & Player Controls
 - **Embedded Room Key (`#KEY`):** Always enabled on internet hosting modes (both Mojang Online and Offline LAN Auth), verified via HMAC-SHA256 over a fresh server nonce. Port scanners and uninvited players without the `#KEY` are silently rejected.
@@ -40,7 +40,7 @@ Click **Test** on the **Start P2P** screen (after reviewing the one-time consent
 - **New Code, OP & Kick:** Rotate the `#KEY` mid-session with **New Code** without kicking current players or restarting the tunnel, and grant/revoke **OP** or **Kick** unwanted players from the live connected players list.
 - **Join Approval (On by Default):** **Join Approval** prompts you in-game with `[Accept]`, `[Always]`, or `[Deny]`, matched by both nickname and Ed25519 device fingerprint (toggleable on the Host screen).
 - **Guest Commands Control:** Even when Cheats are enabled for the host, joiners do not receive command/operator permissions unless **Guest Commands** is explicitly enabled in **Advanced → Security** (or granted per player via **OP**).
-- **End-to-End Encrypted Offline LAN Auth:** Optional Offline LAN Auth disables Mojang account verification while still enforcing Minecraft's native RSA + AES-CFB8 transport encryption (`shouldAuthenticate = false`), channel-bound via SHA-256 host key hash into the `#KEY` HMAC and Ed25519 signature—protecting gameplay traffic against MITM and eavesdropping even over `bore.pub` or UDP Hole Punch (and when **QUIC** is selected, Kwik adds TLS 1.3 transport encryption with an ephemeral P-256 certificate pinned via encrypted signaling). Players receive deterministic Ed25519-key UUIDs with Ed25519 name locks, host name reservation, backup-first legacy data migration, and identity export/import.
+- **End-to-End Encrypted Offline LAN Auth:** **Mojang Online Auth is enabled by default** — PeerPulsar does **not** endorse or support pirated/cracked clients. Optional Offline LAN Auth disables Mojang account verification for local/testing or custom-identity LAN sessions while keeping Minecraft's native RSA + AES-CFB8 transport encryption active and channel-bound via SHA-256 host key hash into the `#KEY` HMAC and Ed25519 signature—protecting gameplay traffic against MITM and eavesdropping even over `bore.pub` or UDP Hole Punch (and when **QUIC** is selected, Kwik adds TLS 1.3 transport encryption with an ephemeral P-256 certificate pinned via encrypted signaling). Players receive deterministic Ed25519-key UUIDs with Ed25519 name locks, host name reservation, backup-first legacy data migration, and identity export/import.
 - **Zero Session Token Access:** PeerPulsar never reads `User.getAccessToken()` or contacts Mojang session servers on behalf of clients.
 
 ### Configurable Network Services (Advanced Menu)
@@ -77,6 +77,6 @@ The compiled mod JAR will be located in `build/libs/peerpulsar-*.jar`.
 
 ## License & Support
 
-- **Open Source:** MIT License ([LICENSE](LICENSE))
+- **Open Source:** MIT License ([LICENSE](LICENSE)) — bundled Jar-in-Jar dependencies (`kwik`, `agent15`, `hkdf`, `siphash`) are attributed under `LGPL-3.0-only`, `Apache-2.0`, and `MIT` in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and `META-INF/licenses/`.
 - **Privacy Policy:** [PRIVACY.md](PRIVACY.md)
 - **Bug Reports & Support:** [GitHub Issues](https://github.com/Kynxhel/PeerPulsar/issues)

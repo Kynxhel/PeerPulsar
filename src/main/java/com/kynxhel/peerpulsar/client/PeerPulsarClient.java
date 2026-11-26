@@ -9,6 +9,7 @@ import com.kynxhel.peerpulsar.client.network.UPnPService;
 import com.kynxhel.peerpulsar.client.network.UdpHolePunchService;
 import com.kynxhel.peerpulsar.client.security.OfflineAuthClient;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.networking.v1.ClientLoginConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.network.chat.Component;
 
@@ -32,6 +33,13 @@ public class PeerPulsarClient implements ClientModInitializer {
                         telemetry.activeEngine().displayName(),
                         pingPart
                 ));
+            }
+        });
+
+        // Automatically clean up pending join key if login aborts before entering world
+        ClientLoginConnectionEvents.DISCONNECT.register((handler, client) -> {
+            if (!P2PNetworkManager.getInstance().isUdpReconnecting()) {
+                P2PNetworkManager.getInstance().clearPendingJoinKey();
             }
         });
 

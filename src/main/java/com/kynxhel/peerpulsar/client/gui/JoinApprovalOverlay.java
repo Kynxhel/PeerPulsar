@@ -81,20 +81,24 @@ public final class JoinApprovalOverlay {
     }
 
     private static Component buildChatPrompt(JoinApprovalManager.PendingRequest req) {
-        String prefix = req.differentDevice()
-                ? "§e⚠ [PeerPulsar] Different device! "
-                : (req.legacyClaim() ? "§e⚠ [PeerPulsar] Legacy data claim: " : "§b✦ [PeerPulsar] ");
-        MutableComponent msg = Component.literal(prefix + "§f" + req.playerName()
-                + " §7(device: " + req.shortFingerprint() + ") ");
-        msg.append(Component.literal("[Accept]")
+        MutableComponent msg;
+        if (req.differentDevice()) {
+            msg = Component.translatable("screen.peerpulsar.approval.chat_diff_device", req.playerName(), req.shortFingerprint());
+        } else if (req.legacyClaim()) {
+            msg = Component.translatable("screen.peerpulsar.approval.chat_legacy_claim", req.playerName(), req.shortFingerprint());
+        } else {
+            msg = Component.translatable("screen.peerpulsar.approval.chat_prompt", req.playerName(), req.shortFingerprint());
+        }
+        msg = msg.copy().append(Component.literal(" "));
+        msg.append(Component.literal("[" + Component.translatable("screen.peerpulsar.approval.accept").getString() + "]")
                 .withStyle(s -> s.withColor(ChatFormatting.GREEN).withBold(true)
                         .withClickEvent(new ClickEvent.RunCommand("/peerpulsar_approve accept " + req.id()))));
         msg.append(Component.literal(" "));
-        msg.append(Component.literal("[Always]")
+        msg.append(Component.literal("[" + Component.translatable("screen.peerpulsar.approval.always").getString() + "]")
                 .withStyle(s -> s.withColor(ChatFormatting.AQUA).withBold(true)
                         .withClickEvent(new ClickEvent.RunCommand("/peerpulsar_approve always " + req.id()))));
         msg.append(Component.literal(" "));
-        msg.append(Component.literal("[Deny]")
+        msg.append(Component.literal("[" + Component.translatable("screen.peerpulsar.approval.deny").getString() + "]")
                 .withStyle(s -> s.withColor(ChatFormatting.RED).withBold(true)
                         .withClickEvent(new ClickEvent.RunCommand("/peerpulsar_approve deny " + req.id()))));
         return msg;
@@ -203,6 +207,10 @@ public final class JoinApprovalOverlay {
         if (isInside(mx, my, x + 8 + (btnW + gap) * 2, btnY, btnW, btnH)) {
             playClickSound();
             JoinApprovalManager.getInstance().decide(req.id(), JoinApprovalManager.Decision.DENY);
+            return false;
+        }
+        // Swallow clicks anywhere on the overlay card so underlying screen buttons aren't triggered
+        if (isInside(mx, my, x, y, w, BOX_H)) {
             return false;
         }
         return true;

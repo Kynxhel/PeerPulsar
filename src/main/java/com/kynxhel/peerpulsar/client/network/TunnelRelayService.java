@@ -134,6 +134,11 @@ public class TunnelRelayService {
                     }
 
                     int assignedPort = elem.getAsJsonObject().get("Hello").getAsInt();
+                    if (assignedPort < 1 || assignedPort > 65535) {
+                        closeQuietly(ctrl);
+                        lastError = "Relay returned invalid port: " + assignedPort;
+                        continue;
+                    }
                     ctrl.setSoTimeout(60_000);
 
                     final Socket committedCtrl = ctrl;
@@ -275,22 +280,35 @@ public class TunnelRelayService {
 
                 final Socket rSock = remoteSock;
                 final Socket lSock = localSock;
+                final java.util.concurrent.atomic.AtomicBoolean downDone = new java.util.concurrent.atomic.AtomicBoolean(false);
 
                 Thread upstream = new Thread(() -> {
                     try {
                         pipeBytes(lSock, rSock);
                     } finally {
                         try {
-                            if (!rSock.isClosed()) {
-                                rSock.setSoTimeout(3000);
+                            long waitEnd = System.currentTimeMillis() + 3000L;
+                            while (!downDone.get() && !rSock.isClosed() && System.currentTimeMillis() < waitEnd) {
+                                Thread.sleep(50L);
                             }
-                        } catch (Exception ignored) {}
+                        } catch (InterruptedException ignored) {
+                            Thread.currentThread().interrupt();
+                        } finally {
+                            if (!downDone.get()) {
+                                closeQuietly(rSock);
+                                closeQuietly(lSock);
+                            }
+                        }
                     }
                 }, "PeerPulsar-Proxy-Up");
                 upstream.setDaemon(true);
                 upstream.start();
 
-                pipeBytes(rSock, lSock);
+                try {
+                    pipeBytes(rSock, lSock);
+                } finally {
+                    downDone.set(true);
+                }
                 upstream.join(1500);
             } catch (Exception e) {
                 PeerPulsar.LOGGER.debug("[P2P-Tunnel] Proxy stream ended ({}): {}", uuid, e.getMessage());

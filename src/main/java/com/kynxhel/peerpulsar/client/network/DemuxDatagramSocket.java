@@ -164,6 +164,9 @@ public final class DemuxDatagramSocket extends DatagramSocket {
         if (closed.compareAndSet(false, true)) {
             incoming.clear();
             incoming.offer(POISON);
+            try {
+                super.close();
+            } catch (Exception ignored) {}
         }
     }
 }

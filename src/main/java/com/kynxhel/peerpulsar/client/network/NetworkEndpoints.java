@@ -404,14 +404,23 @@ public final class NetworkEndpoints {
                         if (resolved != null && isNonPublicAddress(resolved)) {
                             throw new IOException("Rejected non-public target address");
                         }
-                        InetAddress target = (resolved != null && pinnedSet.contains(resolved))
-                                ? resolved
-                                : pinnedAddrs[0];
-                        if (isNonPublicAddress(target)) {
-                            throw new IOException("Rejected non-public pinned address");
+                        if (resolved != null && pinnedSet.contains(resolved)) {
+                            int effTimeout = timeout > 0 ? timeout : connectTimeoutMs;
+                            super.connect(new InetSocketAddress(resolved, isa.getPort()), effTimeout);
+                            return;
                         }
                         int effTimeout = timeout > 0 ? timeout : connectTimeoutMs;
-                        super.connect(new InetSocketAddress(target, isa.getPort()), effTimeout);
+                        IOException lastErr = null;
+                        for (InetAddress cand : pinnedAddrs) {
+                            if (isNonPublicAddress(cand)) continue;
+                            try {
+                                super.connect(new InetSocketAddress(cand, isa.getPort()), effTimeout);
+                                return;
+                            } catch (IOException e) {
+                                lastErr = e;
+                            }
+                        }
+                        throw lastErr != null ? lastErr : new IOException("Rejected non-public pinned address");
                     }
                 };
             }

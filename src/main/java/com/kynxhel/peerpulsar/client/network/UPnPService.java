@@ -130,8 +130,7 @@ public class UPnPService {
             if (testPortMapping && this.localIp != null && !this.localIp.startsWith("127.")) {
                 int probePort = 54321 + (int) (System.currentTimeMillis() % 4000);
                 // Use a short 60-second lease for diagnostic probes so it expires automatically even on crash
-                if (sendAddPortMapping(probePort, this.localIp, "TCP", "PeerPulsar Diagnostic Probe", 60)
-                        || sendAddPortMapping(probePort, this.localIp, "TCP", "PeerPulsar Diagnostic Probe", 0)) {
+                if (sendAddPortMapping(probePort, this.localIp, "TCP", "PeerPulsar Diagnostic Probe", 60)) {
                     canMapPort = true;
                     deletePortMapping(probePort, "TCP");
                 }
@@ -194,6 +193,8 @@ public class UPnPService {
         this.status = UPnPStatus.SEARCHING;
 
         return CompletableFuture.supplyAsync(() -> {
+            boolean needsIpFallback = false;
+            boolean mappedOk = false;
             synchronized (portLock) {
                 if (this.mapAttemptGen.get() != attemptGen) {
                     return false;
@@ -214,7 +215,7 @@ public class UPnPService {
                         boolean found = discoverRouter();
                         if (!found) {
                             PeerPulsar.LOGGER.warn("[UPnP] Router discovery failed or UPnP is disabled.");
-                            resolveExternalIpFallback();
+                            needsIpFallback = true;
                             if (this.mapAttemptGen.get() == attemptGen) {
                                 this.status = UPnPStatus.FAILED;
                             }
@@ -228,9 +229,6 @@ public class UPnPService {
 
                     this.externalIp = null;
                     queryExternalIp();
-                    if (externalIp == null || externalIp.isEmpty() || externalIp.equals("0.0.0.0")) {
-                        resolveExternalIpFallback();
-                    }
 
                     if (this.mapAttemptGen.get() != attemptGen) {
                         return false;
@@ -242,9 +240,6 @@ public class UPnPService {
                         if (discoverRouter()) {
                             this.externalIp = null;
                             queryExternalIp();
-                            if (externalIp == null || externalIp.isEmpty() || externalIp.equals("0.0.0.0")) {
-                                resolveExternalIpFallback();
-                            }
                             grantedLease = addPortMapping(port, localIp, "TCP", description);
                         }
                     }
@@ -263,24 +258,29 @@ public class UPnPService {
                         if (grantedLease > 0) {
                             scheduleLeaseRenewalLocked(attemptGen, port, localIp, description, grantedLease);
                         }
-                        PeerPulsar.LOGGER.info("[UPnP] Port {} mapped via IGD (externalIp={}, lease={}s).",
-                                port, (externalIp != null && !externalIp.isEmpty()) ? "<detected>" : "none", grantedLease);
-                        return true;
+                        needsIpFallback = (externalIp == null || externalIp.isEmpty() || externalIp.equals("0.0.0.0"));
+                        mappedOk = true;
                     } else {
                         if (this.mapAttemptGen.get() == attemptGen) {
                             this.status = UPnPStatus.FAILED;
                         }
-                        return false;
                     }
                 } catch (Exception e) {
                     PeerPulsar.LOGGER.error("[UPnP] Exception during port mapping: {}", e.getMessage());
-                    resolveExternalIpFallback();
+                    needsIpFallback = true;
                     if (this.mapAttemptGen.get() == attemptGen) {
                         this.status = UPnPStatus.FAILED;
                     }
-                    return false;
                 }
             }
+            if (needsIpFallback && this.mapAttemptGen.get() == attemptGen) {
+                resolveExternalIpFallback();
+            }
+            if (mappedOk && this.mapAttemptGen.get() == attemptGen) {
+                PeerPulsar.LOGGER.info("[UPnP] Port {} mapped via IGD (externalIp={}).",
+                        port, (externalIp != null && !externalIp.isEmpty()) ? "<detected>" : "none");
+            }
+            return mappedOk;
         }, P2PNetworkManager.NETWORK_IO_EXECUTOR);
     }
 
@@ -437,17 +437,38 @@ public class UPnPService {
      * Parses each <service> block individually so tag order (<controlURL> before or after <serviceType>)
      * and optional XML namespace prefixes never cause cross-service mismatches.
      */
+    private static HttpURLConnection openPinnedGatewayConnection(String rawUrl, InetAddress pinnedAddr, int connectTimeoutMs, int readTimeoutMs) throws IOException {
+        if (pinnedAddr == null || !isAllowedLocalGatewayUrl(rawUrl, pinnedAddr)) {
+            throw new IOException("Rejected untrusted gateway URL");
+        }
+        URI orig = URI.create(rawUrl.trim());
+        String ipLiteral = pinnedAddr.getHostAddress();
+        if (ipLiteral.indexOf(':') >= 0 && !ipLiteral.startsWith("[")) {
+            int pct = ipLiteral.indexOf('%');
+            if (pct >= 0) ipLiteral = ipLiteral.substring(0, pct);
+            ipLiteral = "[" + ipLiteral + "]";
+        }
+        String portPart = orig.getPort() > 0 ? (":" + orig.getPort()) : "";
+        String path = orig.getRawPath() != null && !orig.getRawPath().isEmpty() ? orig.getRawPath() : "/";
+        String query = orig.getRawQuery() != null ? ("?" + orig.getRawQuery()) : "";
+        URI pinnedUri = URI.create(orig.getScheme() + "://" + ipLiteral + portPart + path + query);
+        HttpURLConnection conn = (HttpURLConnection) pinnedUri.toURL().openConnection();
+        conn.setInstanceFollowRedirects(false);
+        conn.setConnectTimeout(connectTimeoutMs);
+        conn.setReadTimeout(readTimeoutMs);
+        String origHostHeader = orig.getHost() + portPart;
+        conn.setRequestProperty("Host", origHostHeader);
+        return conn;
+    }
+
     private boolean parseDeviceDescription(String locationUrl, InetAddress ssdpSourceAddr) {
         if (!isAllowedLocalGatewayUrl(locationUrl, ssdpSourceAddr)) {
-            PeerPulsar.LOGGER.warn("[UPnP] Rejected untrusted SSDP LOCATION URL: {}", locationUrl);
+            PeerPulsar.LOGGER.warn("[UPnP] Rejected untrusted SSDP LOCATION URL");
             return false;
         }
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) URI.create(locationUrl).toURL().openConnection();
-            conn.setInstanceFollowRedirects(false);
-            conn.setConnectTimeout(2500);
-            conn.setReadTimeout(2500);
+            conn = openPinnedGatewayConnection(locationUrl, ssdpSourceAddr, 2500, 2500);
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) {
                 return false;
@@ -548,14 +569,11 @@ public class UPnPService {
 
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) URI.create(currentControlUrl).toURL().openConnection();
-            conn.setInstanceFollowRedirects(false);
+            conn = openPinnedGatewayConnection(currentControlUrl, currentGatewayAddr, 2500, 2500);
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"");
             conn.setRequestProperty("SOAPAction", "\"" + currentServiceType + "#GetExternalIPAddress\"");
-            conn.setConnectTimeout(2500);
-            conn.setReadTimeout(2500);
 
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(soapBody.getBytes(StandardCharsets.UTF_8));
@@ -607,20 +625,25 @@ public class UPnPService {
         }
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) URI.create(currentControlUrl).toURL().openConnection();
-            conn.setInstanceFollowRedirects(false);
+            conn = openPinnedGatewayConnection(currentControlUrl, currentGatewayAddr, 3500, 3500);
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"");
             conn.setRequestProperty("SOAPAction", "\"" + currentServiceType + "#" + action + "\"");
-            conn.setConnectTimeout(3500);
-            conn.setReadTimeout(3500);
 
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(soapBody.getBytes(StandardCharsets.UTF_8));
             }
 
-            return conn.getResponseCode() == 200;
+            int code = conn.getResponseCode();
+            if (code >= 400 && code < 600) {
+                PeerPulsar.LOGGER.warn("[UPnP] SOAP {} returned HTTP {} (clearing cached gateway)", action, code);
+                this.controlUrl = null;
+                this.serviceType = null;
+                this.gatewaySourceAddr = null;
+                return false;
+            }
+            return code == 200;
         } catch (IOException e) {
             PeerPulsar.LOGGER.warn("[UPnP] SOAP {} connection/IO error (clearing cached gateway): {}", action, e.getMessage());
             this.controlUrl = null;
@@ -701,11 +724,17 @@ public class UPnPService {
     }
 
     private static String readStream(InputStream is) throws IOException {
+        final int maxChars = 256 * 1024;
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
             StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line).append('\n');
+            char[] chunk = new char[4096];
+            int read;
+            while ((read = reader.read(chunk)) != -1) {
+                int toAppend = Math.min(read, maxChars - sb.length());
+                if (toAppend <= 0) {
+                    throw new IOException("HTTP response exceeded " + maxChars + " characters");
+                }
+                sb.append(chunk, 0, toAppend);
             }
             return sb.toString();
         }

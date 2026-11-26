@@ -184,10 +184,21 @@ public class P2PAdvancedScreen extends Screen {
         syncTabButtons();
     }
 
+    private int udpRowHeight() {
+        return Math.max(20, Math.min(26, (bodyH - 72) / 4));
+    }
+
+    private int udpCardHeight() {
+        int rowH = udpRowHeight();
+        return Math.min(28, Math.max(22, bodyH - 32 - (rowH * 4) - 18));
+    }
+
     private void initNetworkTab() {
         int secY = bodyY + 8;
-        int testW = 58;
-        int availW = panelW - 16 - testW - 6;
+        int testW = activeSection == NetworkSection.UDP_ENGINE
+                ? 0
+                : Math.max(58, this.font.width(Component.translatable("screen.peerpulsar.advanced.btn_test_all")) + 12);
+        int availW = panelW - 16 - (testW > 0 ? testW + 6 : 0);
         int secGap = 4;
         int secW = (availW - secGap * 3) / 4;
 
@@ -217,9 +228,11 @@ public class P2PAdvancedScreen extends Screen {
 
             PeerPulsarConfig cfg = PeerPulsarConfig.get();
             int listY = bodyY + 32;
-            int cardY = listY + 108;
+            int rowH = udpRowHeight();
+            int cardH = udpCardHeight();
+            int cardY = listY + rowH * UdpTransportMode.values().length + 4;
             this.autoSwitchHintCard = new NeonToggleCard(
-                    panelLeft + 8, cardY, panelW - 16, 28,
+                    panelLeft + 8, cardY, panelW - 16, cardH,
                     tr("screen.peerpulsar.advanced.udp_auto_hint_title"),
                     () -> cfg.isAutoTransportRecommendations()
                             ? tr("screen.peerpulsar.advanced.udp_auto_hint_on")
@@ -321,7 +334,6 @@ public class P2PAdvancedScreen extends Screen {
                     }
                 }
         );
-        this.portModeCard.active = !mgr.isP2PActive() && !mgr.isStarting();
 
         this.addRenderableWidget(lanKeyCard);
         this.addRenderableWidget(guestCmdCard);
@@ -993,10 +1005,17 @@ public class P2PAdvancedScreen extends Screen {
         graphics.outline(panelLeft + 8, inputY, boxW, 18, NeonTheme.withAlpha(
                 customValidationError != null ? NeonTheme.CRIMSON : NeonTheme.SLATE, 175));
 
+        int statusMaxW = Math.max(40, panelW - 16);
         if (customValidationError != null) {
-            graphics.text(this.font, customValidationError, panelLeft + 8, inputY + 21, NeonTheme.withAlpha(NeonTheme.CRIMSON, 255), false);
+            String err = this.font.width(customValidationError) > statusMaxW
+                    ? this.font.plainSubstrByWidth(customValidationError, Math.max(20, statusMaxW - 8)) + "..."
+                    : customValidationError;
+            graphics.text(this.font, err, panelLeft + 8, inputY + 21, NeonTheme.withAlpha(NeonTheme.CRIMSON, 255), false);
         } else if (customTestStatus != null) {
-            graphics.text(this.font, customTestStatus, panelLeft + 8, inputY + 21, NeonTheme.TEXT_SECONDARY, false);
+            String st = this.font.width(customTestStatus) > statusMaxW
+                    ? this.font.plainSubstrByWidth(customTestStatus, Math.max(20, statusMaxW - 8)) + "..."
+                    : customTestStatus;
+            graphics.text(this.font, st, panelLeft + 8, inputY + 21, NeonTheme.TEXT_SECONDARY, false);
         }
     }
 
@@ -1004,7 +1023,8 @@ public class P2PAdvancedScreen extends Screen {
         int listX = panelLeft + 8;
         int listW = panelW - 16;
         int listY = bodyY + 32;
-        int rowH = 26;
+        int rowH = udpRowHeight();
+        int cardH = udpCardHeight();
         UdpTransportMode[] modes = UdpTransportMode.values();
         int boxH = rowH * modes.length;
 
@@ -1059,7 +1079,7 @@ public class P2PAdvancedScreen extends Screen {
             graphics.text(this.font, desc, listX + 22, ry + 15, NeonTheme.TEXT_SECONDARY, false);
         }
 
-        int footerY = listY + boxH + 40;
+        int footerY = listY + boxH + 4 + cardH + 4;
         UdpHolePunchService.TransportTelemetry tele = UdpHolePunchService.getInstance().getClientTransportTelemetry();
         String footerText;
         int footerColor;
@@ -1241,7 +1261,7 @@ public class P2PAdvancedScreen extends Screen {
         int listW = panelW - 16;
         int listY = bodyY + 32;
         if (activeSection == NetworkSection.UDP_ENGINE) {
-            int rowH = 26;
+            int rowH = udpRowHeight();
             UdpTransportMode[] modes = UdpTransportMode.values();
             int boxH = rowH * modes.length;
             if (mx < listX || mx > listX + listW || my < listY || my >= listY + boxH) {
@@ -1258,19 +1278,25 @@ public class P2PAdvancedScreen extends Screen {
         }
         int noteReserve = activeSection == NetworkSection.RELAY ? 14 : 0;
         int listH = Math.max(46, bodyH - 72 - noteReserve);
-        if (mx < listX || mx > listX + listW || my < listY || my > listY + listH) {
+        if (mx < listX || mx > listX + listW || my < listY || my >= listY + listH) {
             return false;
         }
 
         List<ListItem> items = buildNetworkItems();
         int rowH = 18;
-        int idx = (int) ((my - listY) / rowH) + networkScroll;
+        int maxRows = Math.max(1, listH / rowH);
+        int maxScroll = Math.max(0, items.size() - maxRows);
+        networkScroll = Math.max(0, Math.min(networkScroll, maxScroll));
+        int visibleRow = (int) ((my - listY) / rowH);
+        if (visibleRow < 0 || visibleRow >= maxRows) return false;
+        int idx = visibleRow + networkScroll;
         if (idx < 0 || idx >= items.size()) return false;
 
         ListItem item = items.get(idx);
         if (item.isCustom()) {
             int delX = listX + listW - 20;
-            if (mx >= delX && mx <= delX + 14) {
+            int ry = listY + visibleRow * rowH;
+            if (mx >= delX && mx <= delX + 14 && my >= ry + 2 && my < ry + rowH - 2) {
                 deleteCustomItem(item);
                 return true;
             }
@@ -1286,7 +1312,7 @@ public class P2PAdvancedScreen extends Screen {
         int listW = panelW - 16;
         int listY = bodyY + 48;
         int listH = bodyH - 56;
-        if (mx < listX || mx > listX + listW || my < listY || my > listY + listH) {
+        if (mx < listX || mx > listX + listW || my < listY || my >= listY + listH) {
             return false;
         }
 
@@ -1315,13 +1341,18 @@ public class P2PAdvancedScreen extends Screen {
         List<PlayerRow> rows = loadPlayerRows();
         int rowH = 18;
         int startY = listY + 20;
-        int idx = (int) ((my - startY) / rowH) + playersScroll;
-        if (idx < 0 || idx >= rows.size() || my < startY) return false;
+        int maxRows = Math.max(1, (listH - 24) / rowH);
+        playersScroll = Math.max(0, Math.min(playersScroll, Math.max(0, rows.size() - maxRows)));
+        int visibleRow = (int) ((my - startY) / rowH);
+        if (my < startY || visibleRow < 0 || visibleRow >= maxRows) return false;
+        int idx = visibleRow + playersScroll;
+        if (idx < 0 || idx >= rows.size()) return false;
 
         PlayerRow row = rows.get(idx);
+        int ry = startY + visibleRow * rowH;
         int remX = listX + listW - 50;
         int trX = remX - 60;
-        if (row.effectiveUuid() != null && mx >= trX && mx <= trX + 56) {
+        if (row.effectiveUuid() != null && mx >= trX && mx <= trX + 56 && my >= ry + 1 && my < ry + 16) {
             playClickSound();
             try {
                 UUID src = UUID.fromString(row.effectiveUuid());
@@ -1332,10 +1363,10 @@ public class P2PAdvancedScreen extends Screen {
             }
             return true;
         }
-        if (mx >= remX && mx <= remX + 44) {
+        if (mx >= remX && mx <= remX + 44 && my >= ry + 1 && my < ry + 16) {
             playClickSound();
-            ApprovedPlayerStore.remove(worldDir, row.keyFingerprint(), row.name());
-            NameLockStore.removeByName(worldDir, row.name());
+            ApprovedPlayerStore.remove(worldDir, row.keyFingerprint(), null);
+            NameLockStore.removeByFingerprint(worldDir, row.keyFingerprint());
             showToast(tr("screen.peerpulsar.advanced.toast_removed", row.name()), NeonTheme.CRIMSON);
             return true;
         }
@@ -1344,12 +1375,22 @@ public class P2PAdvancedScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (activeTab == Tab.NETWORK) {
-            networkScroll += (scrollY < 0 ? 1 : -1);
+        if (scrollY == 0) {
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        }
+        if (activeTab == Tab.NETWORK && activeSection != NetworkSection.UDP_ENGINE) {
+            int noteReserve = activeSection == NetworkSection.RELAY ? 14 : 0;
+            int listH = Math.max(46, bodyH - 72 - noteReserve);
+            int maxRows = Math.max(1, listH / 18);
+            int maxScroll = Math.max(0, buildNetworkItems().size() - maxRows);
+            networkScroll = Math.max(0, Math.min(maxScroll, networkScroll + (scrollY < 0 ? 1 : -1)));
             return true;
         }
         if (activeTab == Tab.SECURITY && transferSourceRow == null) {
-            playersScroll += (scrollY < 0 ? 1 : -1);
+            int listH = bodyH - 56;
+            int maxRows = Math.max(1, (listH - 24) / 18);
+            int maxScroll = Math.max(0, loadPlayerRows().size() - maxRows);
+            playersScroll = Math.max(0, Math.min(maxScroll, playersScroll + (scrollY < 0 ? 1 : -1)));
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);

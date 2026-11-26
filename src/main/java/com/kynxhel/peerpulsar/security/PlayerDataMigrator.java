@@ -19,6 +19,7 @@ import java.util.UUID;
  */
 public final class PlayerDataMigrator {
     private static final DateTimeFormatter BACKUP_TS = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss_SSS");
+    private static final java.util.concurrent.atomic.AtomicLong BACKUP_SEQ = new java.util.concurrent.atomic.AtomicLong(0);
 
     public enum MigrationStatus {
         MIGRATED,
@@ -53,7 +54,7 @@ public final class PlayerDataMigrator {
 
     public static Path resolveAdvancementsDir(Path worldDir) {
         Path modern = worldDir.resolve("players").resolve("advancements");
-        if (Files.isDirectory(modern)) {
+        if (Files.isDirectory(modern) || Files.isDirectory(worldDir.resolve("players"))) {
             return modern;
         }
         Path legacy = worldDir.resolve("advancements");
@@ -65,7 +66,7 @@ public final class PlayerDataMigrator {
 
     public static Path resolveStatsDir(Path worldDir) {
         Path modern = worldDir.resolve("players").resolve("stats");
-        if (Files.isDirectory(modern)) {
+        if (Files.isDirectory(modern) || Files.isDirectory(worldDir.resolve("players"))) {
             return modern;
         }
         Path legacy = worldDir.resolve("stats");
@@ -143,7 +144,7 @@ public final class PlayerDataMigrator {
             return new MigrationResult(MigrationStatus.UNAUTHORIZED_LEGACY_CLAIM, legacyUuid, targetUuid, null, 0);
         }
 
-        Path backupDir = worldDir.resolve("peerpulsar_backups").resolve(LocalDateTime.now().format(BACKUP_TS));
+        Path backupDir = nextBackupDir(worldDir, "");
         try {
             int backedUp = backupUuidFiles(worldDir, legacyUuid, backupDir);
             int copied = 0;
@@ -202,7 +203,7 @@ public final class PlayerDataMigrator {
             return new TransferResult(false, "No playerdata found for source UUID " + fromUuid, null, 0);
         }
 
-        Path backupDir = worldDir.resolve("peerpulsar_backups").resolve("transfer_" + LocalDateTime.now().format(BACKUP_TS));
+        Path backupDir = nextBackupDir(worldDir, "transfer_");
         try {
             backupUuidFiles(worldDir, fromUuid, backupDir);
             backupUuidFiles(worldDir, toUuid, backupDir);
@@ -245,10 +246,19 @@ public final class PlayerDataMigrator {
         return count;
     }
 
+    private static Path nextBackupDir(Path worldDir, String prefix) {
+        String base = prefix + LocalDateTime.now().format(BACKUP_TS);
+        Path dir = worldDir.resolve("peerpulsar_backups").resolve(base);
+        if (Files.exists(dir)) {
+            dir = worldDir.resolve("peerpulsar_backups").resolve(base + "_" + BACKUP_SEQ.incrementAndGet());
+        }
+        return dir;
+    }
+
     private static int backupFile(Path src, Path dst) throws IOException {
         if (!Files.isRegularFile(src)) return 0;
         if (dst.getParent() != null) Files.createDirectories(dst.getParent());
-        Files.copy(src, dst, StandardCopyOption.COPY_ATTRIBUTES);
+        Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
         return 1;
     }
 

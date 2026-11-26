@@ -376,6 +376,8 @@ public class P2PHostScreen extends Screen {
         int actionH = compact ? 21 : 24;
         int halfW = (panelW - gapX) / 2;
 
+        int footerY = Math.max(actionY + actionH + (compact ? 3 : 5), Math.min(this.height - 21, actionY + actionH + (compact ? 4 : 6)));
+
         this.startStopButton = new NeonButton(
                 panelLeft, actionY, halfW, actionH,
                 Component.translatable("screen.peerpulsar.host.btn_start").withStyle(ChatFormatting.BOLD),
@@ -411,7 +413,6 @@ public class P2PHostScreen extends Screen {
         );
         this.addRenderableWidget(copyDiscordButton);
 
-        int footerY = Math.min(this.height - 22, actionY + actionH + (compact ? 4 : 6));
         int footerBtnW = Math.min(160, Math.max(90, this.width - 24));
         this.backButton = new NeonButton(
                 this.width / 2 - footerBtnW / 2, footerY, footerBtnW, 20,
@@ -883,21 +884,28 @@ public class P2PHostScreen extends Screen {
 
         String code = networkManager.getHostedRoomCode();
         if (code != null) {
-            String codeLabel = tr("screen.peerpulsar.host.label_room_code");
-            int codeStartX = panelLeft + 16 + this.font.width(codeLabel);
-            int maxCodeW = Math.max(24, codeBoxRight - codeStartX - 4);
+            boolean narrowBox = (codeBoxRight - (panelLeft + 10)) < 110;
+            String codeLabel = narrowBox ? "" : tr("screen.peerpulsar.host.label_room_code");
+            int codeStartX = narrowBox ? (panelLeft + 14) : (panelLeft + 16 + this.font.width(codeLabel));
+            int maxCodeW = Math.max(0, codeBoxRight - codeStartX - 4);
             String drawnCode = code;
-            if (this.font.width(Component.literal(drawnCode).withStyle(ChatFormatting.BOLD)) > maxCodeW) {
+            if (maxCodeW <= 8) {
+                drawnCode = "";
+            } else if (this.font.width(Component.literal(drawnCode).withStyle(ChatFormatting.BOLD)) > maxCodeW) {
                 int ellipsisW = this.font.width(Component.literal("...").withStyle(ChatFormatting.BOLD));
-                String trimmed = this.font.plainSubstrByWidth(code, Math.max(12, maxCodeW - ellipsisW));
+                String trimmed = this.font.plainSubstrByWidth(code, Math.max(4, maxCodeW - ellipsisW));
                 while (!trimmed.isEmpty() && this.font.width(Component.literal(trimmed + "...").withStyle(ChatFormatting.BOLD)) > maxCodeW) {
                     trimmed = trimmed.substring(0, trimmed.length() - 1);
                 }
-                drawnCode = trimmed + "...";
+                drawnCode = trimmed.isEmpty() ? "" : (trimmed + "...");
             }
-            graphics.text(this.font, codeLabel, panelLeft + 14, codeBoxY + 5, NeonTheme.withAlpha(NeonTheme.AMBER, 255), false);
-            graphics.text(this.font, Component.literal(drawnCode).withStyle(ChatFormatting.BOLD),
-                    codeStartX, codeBoxY + 5, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
+            if (!narrowBox) {
+                graphics.text(this.font, codeLabel, panelLeft + 14, codeBoxY + 5, NeonTheme.withAlpha(NeonTheme.AMBER, 255), false);
+            }
+            if (!drawnCode.isEmpty()) {
+                graphics.text(this.font, Component.literal(drawnCode).withStyle(ChatFormatting.BOLD),
+                        codeStartX, codeBoxY + 5, NeonTheme.withAlpha(NeonTheme.CYAN, 255), true);
+            }
         } else {
             String placeholder = this.font.plainSubstrByWidth(
                     tr("screen.peerpulsar.host.room_code_placeholder"), Math.max(40, codeBoxRight - panelLeft - 24));
@@ -1052,11 +1060,14 @@ public class P2PHostScreen extends Screen {
             int rowH = 19;
             int maxRows = Math.max(1, listH / rowH);
             List<ConnectedPlayerEntry> players = getConnectedPlayers();
+            playersScroll = Math.max(0, Math.min(playersScroll, Math.max(0, players.size() - maxRows)));
             double mx = event.x();
             double my = event.y();
 
             for (int i = 0; i < maxRows && (i + playersScroll) < players.size(); i++) {
-                ConnectedPlayerEntry entry = players.get(i + playersScroll);
+                int idx = i + playersScroll;
+                if (idx < 0) continue;
+                ConnectedPlayerEntry entry = players.get(idx);
                 if (entry.isHost()) continue;
                 int ry = listY + i * rowH;
                 int kickW = 24;
@@ -1086,8 +1097,14 @@ public class P2PHostScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (networkManager.isP2PActive() && mouseX >= sideLeft && mouseX <= sideLeft + sideW) {
-            playersScroll += (scrollY < 0 ? 1 : -1);
+        if (scrollY != 0 && networkManager.isP2PActive() && mouseX >= sideLeft && mouseX <= sideLeft + sideW) {
+            int sideCardH = compact ? 28 : 31;
+            int sideCardGap = compact ? 4 : 5;
+            int sidePanelH = 24 + (sideCardH * 4) + (sideCardGap * 3) + 24;
+            int listH = sidePanelH - 44;
+            int maxRows = Math.max(1, listH / 19);
+            int maxScroll = Math.max(0, getConnectedPlayers().size() - maxRows);
+            playersScroll = Math.max(0, Math.min(maxScroll, playersScroll + (scrollY < 0 ? 1 : -1)));
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);

@@ -83,6 +83,7 @@ public class P2PNetworkManager {
     private volatile boolean useDefaultPort = PeerPulsarConfig.get().isUseDefaultPort();
     private volatile boolean joinApprovalEnabled = PeerPulsarConfig.get().isJoinApprovalEnabled();
     private final AtomicLong hostGeneration = new AtomicLong(0);
+    private final AtomicLong reconnectGeneration = new AtomicLong(0);
     private final AtomicBoolean suppressNextUdpClientStop = new AtomicBoolean(false);
     private volatile ActiveUdpJoinInfo activeUdpJoinInfo = null;
     private volatile boolean udpReconnecting = false;
@@ -126,6 +127,10 @@ public class P2PNetworkManager {
                         if (mapped != null && !mapped.isBlank()) {
                             return mapped;
                         }
+                    }
+                    if (activeHostingMode == ActiveHostingMode.TUNNEL_RELAY
+                            && inet.getAddress() != null && inet.getAddress().isLoopbackAddress()) {
+                        return "tunnel-stream:" + inet.getPort();
                     }
                     return inet.getAddress() != null ? inet.getAddress().getHostAddress() : inet.getHostString();
                 }
@@ -313,6 +318,10 @@ public class P2PNetworkManager {
         this.pendingJoinKey = RoomKeys.normalize(key);
     }
 
+    public void clearPendingJoinKey() {
+        this.pendingJoinKey = null;
+    }
+
     public String consumePendingJoinKey() {
         String key = this.pendingJoinKey;
         this.pendingJoinKey = null;
@@ -376,6 +385,7 @@ public class P2PNetworkManager {
      * Starts the IntegratedServer as a P2P hosted world, triggers UPnP/UDP/Tunnel and computes room code.
      */
     public synchronized void startP2PHost(Minecraft client, GameType gameType, boolean cheats, int port, boolean offlineMode, Consumer<Boolean> callback) {
+        this.reconnectGeneration.incrementAndGet();
         if (this.starting || this.p2pActive) {
             this.lastErrorMessage = "P2P host is already starting or active.";
             callback.accept(false);
@@ -750,15 +760,28 @@ public class P2PNetworkManager {
                 }
                 return;
             }
+            final long myReconnectGen = this.reconnectGeneration.incrementAndGet();
             this.udpReconnecting = true;
             PeerPulsar.LOGGER.info("[P2P-UDP] Reconnecting with transport engine {}...", targetEngine.displayName());
             UdpHolePunchService.getInstance().stopClientProxy();
             suppressNextClientProxyDisconnectCleanup();
-            mc.disconnectFromWorld(Component.translatable("screen.peerpulsar.transport.reconnecting", targetEngine.displayName()));
+            try {
+                mc.disconnectFromWorld(Component.translatable("screen.peerpulsar.transport.reconnecting", targetEngine.displayName()));
+            } finally {
+                // Consume any un-fired one-shot flag so a skipped DISCONNECT event never leaks it
+                this.suppressNextUdpClientStop.set(false);
+            }
 
             UdpHolePunchService.getInstance()
                     .startClientProxyAsync(info.roomCode(), info.signalingServer(), targetEngine)
                     .whenComplete((res, err) -> mc.execute(() -> {
+                        if (this.reconnectGeneration.get() != myReconnectGen || this.p2pActive || this.starting) {
+                            this.udpReconnecting = false;
+                            if (err == null && res != null && res.success()) {
+                                UdpHolePunchService.getInstance().stopClientProxyIfPort(res.localPort());
+                            }
+                            return;
+                        }
                         this.udpReconnecting = false;
                         if (err == null && res != null && res.success()) {
                             this.activeUdpJoinInfo = info;
@@ -821,18 +844,22 @@ public class P2PNetworkManager {
         if (client != null) {
             IntegratedServer server = client.getSingleplayerServer();
             if (server != null) {
-                if (server.isPublished()) {
-                    try {
-                        server.unpublishServer();
-                    } catch (Exception e) {
-                        PeerPulsar.LOGGER.warn("[P2P-26.3] Failed to unpublish server cleanly: {}", e.getMessage());
+                OfflineAuth.disconnectAllPendingLogins(server);
+                server.execute(() -> {
+                    if (!server.isRunning()) return;
+                    if (server.isPublished()) {
+                        try {
+                            server.unpublishServer();
+                        } catch (Exception e) {
+                            PeerPulsar.LOGGER.warn("[P2P-26.3] Failed to unpublish server cleanly: {}", e.getMessage());
+                        }
                     }
-                }
-                try {
-                    server.setUsesAuthentication(true);
-                } catch (Exception e) {
-                    PeerPulsar.LOGGER.warn("[P2P-26.3] Failed to restore Mojang authentication flag: {}", e.getMessage());
-                }
+                    try {
+                        server.setUsesAuthentication(true);
+                    } catch (Exception e) {
+                        PeerPulsar.LOGGER.warn("[P2P-26.3] Failed to restore Mojang authentication flag: {}", e.getMessage());
+                    }
+                });
             }
             if (client.player != null) {
                 client.player.sendSystemMessage(Component.literal("§c■ [PeerPulsar] §fP2P hosting stopped and network resources cleared."));
@@ -848,7 +875,9 @@ public class P2PNetworkManager {
             UdpHolePunchService.getInstance().stopClientProxy();
         }
         if (!this.udpReconnecting) {
+            this.reconnectGeneration.incrementAndGet();
             this.activeUdpJoinInfo = null;
+            this.pendingJoinKey = null;
         }
         boolean wasActiveOrStarting;
         synchronized (this) {
@@ -869,6 +898,11 @@ public class P2PNetworkManager {
         if (wasActiveOrStarting) {
             BruteForceGuard.getGlobal().reset();
             JoinApprovalManager.getInstance().clearAll();
+            Minecraft mc = Minecraft.getInstance();
+            IntegratedServer server = mc != null ? mc.getSingleplayerServer() : null;
+            if (server != null) {
+                OfflineAuth.disconnectAllPendingLogins(server);
+            }
             PeerPulsar.LOGGER.info("[P2P-26.3] World disconnected — auto-cleaning UPnP, UDP & Tunnel.");
             UPnPService.getInstance().closePortAsync();
             TunnelRelayService.getInstance().stopTunnel();

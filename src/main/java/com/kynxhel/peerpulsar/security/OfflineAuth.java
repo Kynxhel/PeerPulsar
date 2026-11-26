@@ -19,8 +19,10 @@ import net.minecraft.world.level.storage.LevelResource;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
 import java.util.concurrent.CompletableFuture;
@@ -54,6 +56,11 @@ public final class OfflineAuth {
             Collections.synchronizedMap(new WeakHashMap<>());
     private static final Map<ServerLoginPacketListenerImpl, String> PENDING_APPROVAL_IDS =
             Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Set<ServerLoginPacketListenerImpl> ACTIVE_NON_MEMORY_LOGINS =
+            Collections.newSetFromMap(Collections.synchronizedMap(new WeakHashMap<>()));
+    private static final Set<ServerLoginPacketListenerImpl> DISCONNECTED_LOGINS =
+            Collections.newSetFromMap(Collections.synchronizedMap(new WeakHashMap<>()));
+    private static final Object APPROVAL_LOCK = new Object();
 
     private static volatile HostSecurityContext hostContext;
 
@@ -126,6 +133,8 @@ public final class OfflineAuth {
                 handler.disconnect(Component.literal("Encrypted PeerPulsar handshake required."));
                 return;
             }
+
+            ACTIVE_NON_MEMORY_LOGINS.add(handler);
 
             String remoteIp = ctx.resolveRemoteIp(connection);
             if (roomKeyRequired && BruteForceGuard.getGlobal().isBlocked(remoteIp)) {
@@ -225,9 +234,12 @@ public final class OfflineAuth {
                     completeLoginVerification(server, handler, query, name, publicKey);
                 } catch (Exception e) {
                     PeerPulsar.LOGGER.warn("[PeerPulsar-Auth] Verification error for '{}': {}", name, e.getMessage());
-                    server.execute(() -> handler.disconnect(Component.literal("PeerPulsar authentication failed.")));
+                    disconnectSync(server, handler, Component.literal("PeerPulsar authentication failed."));
                 } finally {
-                    PENDING_APPROVAL_IDS.remove(handler);
+                    synchronized (APPROVAL_LOCK) {
+                        PENDING_APPROVAL_IDS.remove(handler);
+                    }
+                    ACTIVE_NON_MEMORY_LOGINS.remove(handler);
                 }
             }, exec);
             synchronizer.waitFor(gateFuture);
@@ -235,11 +247,86 @@ public final class OfflineAuth {
 
         ServerLoginConnectionEvents.DISCONNECT.register((handler, server) -> {
             PENDING.remove(handler);
-            String approvalId = PENDING_APPROVAL_IDS.remove(handler);
+            ACTIVE_NON_MEMORY_LOGINS.remove(handler);
+            String approvalId;
+            synchronized (APPROVAL_LOCK) {
+                DISCONNECTED_LOGINS.add(handler);
+                approvalId = PENDING_APPROVAL_IDS.remove(handler);
+            }
             if (approvalId != null) {
                 JoinApprovalManager.getInstance().cancel(approvalId);
             }
         });
+    }
+
+    /**
+     * Disconnects any in-flight non-memory LOGIN connections when hosting stops so clients
+     * cannot slip through between server shutdown and QUERY_START.
+     */
+    public static void disconnectAllPendingLogins(MinecraftServer server) {
+        if (server == null) return;
+        java.util.List<ServerLoginPacketListenerImpl> snapshot;
+        synchronized (ACTIVE_NON_MEMORY_LOGINS) {
+            snapshot = new ArrayList<>(ACTIVE_NON_MEMORY_LOGINS);
+        }
+        if (snapshot.isEmpty()) return;
+        server.execute(() -> {
+            for (ServerLoginPacketListenerImpl h : snapshot) {
+                try {
+                    h.disconnect(Component.literal("The host stopped P2P hosting."));
+                } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    private static void disconnectSync(MinecraftServer server, ServerLoginPacketListenerImpl handler, Component reason) {
+        if (server == null || handler == null) return;
+        if (server.isSameThread()) {
+            handler.disconnect(reason);
+            return;
+        }
+        CompletableFuture<Void> done = new CompletableFuture<>();
+        server.execute(() -> {
+            try {
+                handler.disconnect(reason);
+                done.complete(null);
+            } catch (Throwable t) {
+                done.completeExceptionally(t);
+            }
+        });
+        try {
+            done.get(5, TimeUnit.SECONDS);
+        } catch (Exception ignored) {}
+    }
+
+    private static JoinApprovalManager.Decision awaitApprovalDecision(
+            ServerLoginPacketListenerImpl handler,
+            String name,
+            String keyFingerprint,
+            String mojangUuid,
+            boolean diffDevice,
+            boolean legacyClaim
+    ) throws Exception {
+        Connection conn = ((ServerLoginPacketListenerAccessor) handler).peerpulsar$getConnection();
+        synchronized (APPROVAL_LOCK) {
+            if (DISCONNECTED_LOGINS.contains(handler) || (conn != null && !conn.isConnected())) {
+                return JoinApprovalManager.Decision.DENY;
+            }
+        }
+        JoinApprovalManager.PendingRequest req = JoinApprovalManager.getInstance()
+                .requestApproval(name, keyFingerprint, mojangUuid, diffDevice, legacyClaim);
+        boolean alreadyGone;
+        synchronized (APPROVAL_LOCK) {
+            alreadyGone = DISCONNECTED_LOGINS.contains(handler) || (conn != null && !conn.isConnected());
+            if (!alreadyGone) {
+                PENDING_APPROVAL_IDS.put(handler, req.id());
+            }
+        }
+        if (alreadyGone) {
+            JoinApprovalManager.getInstance().cancel(req.id());
+            return JoinApprovalManager.Decision.DENY;
+        }
+        return req.future().get();
     }
 
     private static void completeLoginVerification(
@@ -296,12 +383,10 @@ public final class OfflineAuth {
             } else {
                 boolean diffDevice = (check == ApprovedPlayerStore.CheckResult.DIFFERENT_DEVICE)
                         || (query.offlineMode() && existingLock != null && !existingLock.equalsIgnoreCase(keyFingerprint));
-                JoinApprovalManager.PendingRequest req = JoinApprovalManager.getInstance()
-                        .requestApproval(name, keyFingerprint, mojangUuid, diffDevice, hasUnclaimedLegacy);
-                PENDING_APPROVAL_IDS.put(handler, req.id());
-                JoinApprovalManager.Decision decision = req.future().get();
+                JoinApprovalManager.Decision decision = awaitApprovalDecision(
+                        handler, name, keyFingerprint, mojangUuid, diffDevice, hasUnclaimedLegacy);
                 if (decision == JoinApprovalManager.Decision.DENY || decision == JoinApprovalManager.Decision.TIMEOUT) {
-                    server.execute(() -> handler.disconnect(Component.literal("Host did not approve your join request.")));
+                    disconnectSync(server, handler, Component.literal("Host did not approve your join request."));
                     return;
                 }
                 if (decision == JoinApprovalManager.Decision.ALWAYS) {
@@ -310,28 +395,27 @@ public final class OfflineAuth {
                             System.currentTimeMillis(), System.currentTimeMillis()
                     ));
                     if (query.offlineMode()) {
-                        NameLockStore.rebind(worldDir, name, keyFingerprint);
+                        NameLockStore.verifyOrRebind(worldDir, name, keyFingerprint, true);
+                        authorizedToClaimLegacy = true;
                     }
-                } else if (query.offlineMode() && existingLock == null) {
-                    NameLockStore.rebind(worldDir, name, keyFingerprint);
+                } else if (query.offlineMode()) {
+                    NameLockStore.Result bindRes = NameLockStore.verifyOrRebind(worldDir, name, keyFingerprint, diffDevice);
+                    authorizedToClaimLegacy = (bindRes == NameLockStore.Result.BOUND_NEW || bindRes == NameLockStore.Result.MATCHED);
                 }
-                authorizedToClaimLegacy = query.offlineMode()
-                        && (existingLock == null || existingLock.equalsIgnoreCase(keyFingerprint));
             }
         } else if (query.offlineMode()) {
-            if (existingLock != null && !existingLock.equalsIgnoreCase(keyFingerprint)) {
+            NameLockStore.Result preCheck = NameLockStore.verifyOrRebind(worldDir, name, keyFingerprint, false);
+            if (preCheck == NameLockStore.Result.MISMATCH) {
                 PeerPulsar.LOGGER.info("[PeerPulsar-Auth] Rejected '{}': name locked to another device.", name);
-                server.execute(() -> handler.disconnect(Component.literal(
+                disconnectSync(server, handler, Component.literal(
                         "The name '" + name + "' is already claimed by another player in this world.\n"
                                 + "Use a different name, or ask the host to remove it from " + NameLockStore.FILE_NAME + "."
-                )));
+                ));
                 return;
             }
-            if (existingLock == null && hasUnclaimedLegacy) {
-                JoinApprovalManager.PendingRequest req = JoinApprovalManager.getInstance()
-                        .requestApproval(name, keyFingerprint, mojangUuid, false, true);
-                PENDING_APPROVAL_IDS.put(handler, req.id());
-                JoinApprovalManager.Decision decision = req.future().get();
+            if (preCheck == NameLockStore.Result.BOUND_NEW && hasUnclaimedLegacy) {
+                JoinApprovalManager.Decision decision = awaitApprovalDecision(
+                        handler, name, keyFingerprint, mojangUuid, false, true);
                 if (decision == JoinApprovalManager.Decision.ACCEPT || decision == JoinApprovalManager.Decision.ALWAYS) {
                     authorizedToClaimLegacy = true;
                     if (decision == JoinApprovalManager.Decision.ALWAYS) {
@@ -342,9 +426,8 @@ public final class OfflineAuth {
                     }
                 }
             } else {
-                authorizedToClaimLegacy = (existingLock == null || existingLock.equalsIgnoreCase(keyFingerprint));
+                authorizedToClaimLegacy = (preCheck == NameLockStore.Result.BOUND_NEW || preCheck == NameLockStore.Result.MATCHED);
             }
-            NameLockStore.checkAndBind(worldDir, name, publicKey);
         }
 
         // 3. Migrate legacy offline-name playerdata safely (copy + backup) and apply GameProfile

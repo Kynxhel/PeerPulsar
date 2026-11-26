@@ -139,6 +139,12 @@ class SecurityCryptoTest {
 
         assertTrue(NameLockStore.removeByName(worldDir, "alice"));
         assertNull(NameLockStore.getBoundFingerprint(worldDir, "Alice"));
+
+        // Atomic verifyOrRebind rejects concurrent mismatch unless allowOverwrite is explicit
+        assertEquals(NameLockStore.Result.BOUND_NEW, NameLockStore.verifyOrRebind(worldDir, "Bob", "1111222233334444", false));
+        assertEquals(NameLockStore.Result.MISMATCH, NameLockStore.verifyOrRebind(worldDir, "bob", "9999888877776666", false));
+        assertEquals(NameLockStore.Result.MATCHED, NameLockStore.verifyOrRebind(worldDir, "bob", "1111222233334444", false));
+        assertEquals(NameLockStore.Result.BOUND_NEW, NameLockStore.verifyOrRebind(worldDir, "Bob", "9999888877776666", true));
     }
 
     @Test

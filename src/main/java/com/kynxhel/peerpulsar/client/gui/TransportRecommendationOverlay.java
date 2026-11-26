@@ -263,6 +263,10 @@ public final class TransportRecommendationOverlay {
             dismissCurrent();
             return false;
         }
+        // Swallow clicks anywhere on the overlay card so underlying screen buttons aren't triggered
+        if (isInside(mx, my, x, y, w, BOX_H)) {
+            return false;
+        }
         return true;
     }
 

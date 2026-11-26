@@ -194,6 +194,12 @@ public final class ClientIdentity {
             Files.createDirectories(file.getParent());
         }
         Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.deleteIfExists(tmp);
+        try {
+            Files.createFile(tmp, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+        } catch (UnsupportedOperationException | IOException ignored) {
+            restrictPrivateFilePermissions(tmp);
+        }
         Files.writeString(tmp, obj.toString(), StandardCharsets.UTF_8);
         restrictPrivateFilePermissions(tmp);
         try {
